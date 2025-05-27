@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     ports:
-      - "5432:5432"
+      - "5433:5432" # Changed host port to 5433
 
   web:
     build: .
@@ -22,9 +22,21 @@ services:
       - "8000:8000"
     depends_on:
       - db
+      - redis
     environment:
       - DJANGO_SETTINGS_MODULE=Backend.settings
       - DATABASE_URL=postgres://chelal_user:chelal_password@db:5432/chelal_db
+      - DATABASE_HOST=db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
 
 volumes:
   postgres_data:
+  redis_data:

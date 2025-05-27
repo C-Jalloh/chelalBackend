@@ -2,6 +2,17 @@ Django>=4.2
 psycopg2-binary
 djangorestframework
 djangorestframework-simplejwt
+gunicorn
+celery
+redis
+channels
+channels-redis
+django-two-factor-auth
+phonenumbers
+django-otp
+pytest
+pytest-django
+requests
 
 
 

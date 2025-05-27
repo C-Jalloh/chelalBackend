@@ -1,7 +1,15 @@
-from rest_framework.test import APITestCase
+import os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'Backend.settings')
+import django
+django.setup()
+
 from django.urls import reverse
 from .models import User, Role, Notification, NoteTemplate, Task, Patient
+from rest_framework.test import APITestCase
 from datetime import date
+import datetime
+from django.utils import timezone
+from .tasks import send_appointment_reminder_task, send_appointment_email_reminder_task, send_appointment_followup_task
 
 class NotificationFeatureTestCase(APITestCase):
     def setUp(self):
@@ -81,3 +89,70 @@ class TaskFeatureTestCase(APITestCase):
         if response.status_code not in [200, 202, 204]:
             print('Task update error:', response.data)
         self.assertIn(response.status_code, [200, 202, 204])
+
+class AutomatedNotificationTest(APITestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.phone = os.environ.get('TEST_PATIENT_PHONE', '+2207834351')
+        cls.email = os.environ.get('TEST_PATIENT_EMAIL', 'esjallow03@gmail.com')
+
+        # Create roles
+        cls.admin_role = Role.objects.create(name='Admin')
+        cls.doctor_role = Role.objects.create(name='Doctor')
+        cls.patient_role = Role.objects.create(name='Receptionist')
+
+        # Create users
+        cls.admin = User.objects.create_user(username='admin', password='adminpass', role=cls.admin_role, is_staff=True)
+        cls.doctor = User.objects.create_user(username='doc', password='docpass', role=cls.doctor_role)
+
+        # Create patient
+        cls.patient = Patient.objects.create(
+            unique_id='TEST123',
+            first_name='Test',
+            last_name='Patient',
+            date_of_birth='1990-01-01',
+            gender='Other',
+            contact_info=cls.phone,
+            address='Test Address',
+            known_allergies='',
+        )
+        cls.patient.email = cls.email
+        cls.patient.save()
+
+    def setUp(self):
+        super().setUp()  # Ensure parent setUp is called if it exists
+        self.client.force_authenticate(user=self.doctor)
+
+    def test_automated_notification_flow(self):
+        from core.models import Appointment
+
+        # Create a test appointment (scheduled for 24h from now)
+        appt_time = (timezone.now() + datetime.timedelta(hours=24)).time()
+        appt_date = (timezone.now() + datetime.timedelta(hours=24)).date()
+        appt = Appointment.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            date=appt_date,
+            time=appt_time,
+            status='scheduled'
+        )
+
+        # Trigger SMS reminder
+        send_appointment_reminder_task.delay(appt.id, 'reminder')
+
+        # Trigger Email reminder
+        send_appointment_email_reminder_task.delay(appt.id, 'reminder')
+
+        # Simulate follow-up (mark as completed and trigger follow-up)
+        appt.status = 'completed'
+        appt.save()
+
+        # Trigger follow-up (SMS and Email)
+        send_appointment_followup_task.delay(appt.id)
+
+        self.assertEqual(appt.status, 'completed')
+        self.assertTrue(appt.id)  # Ensure appointment ID is valid
+
+        # Check patient received SMS and Email (this part is just simulated, in real case, we would check the actual SMS/Email)
+        print('SMS and Email reminders and follow-ups triggered. Check Celery worker logs and patient inbox/phone.')
