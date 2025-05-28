@@ -1,5 +1,8 @@
 from django.shortcuts import render
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework.renderers import JSONRenderer
+from rest_framework.permissions import AllowAny
 from rest_framework import viewsets, permissions, serializers
 from .models import Role, User, Patient, Appointment, Encounter, Prescription, InventoryItem, Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument, Notification, NoteTemplate, Task, AuditLog, Bed, Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, ServiceCatalog, InsuranceDetail, Bill, BillItem, Payment, AppointmentNotification, TelemedicineSession, SyncConflict, SyncQueueStatus, Consent, Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue
 from .serializers import (
@@ -37,10 +40,14 @@ User = get_user_model()
 # Create your views here.
 
 class MyTokenObtainPairView(TokenObtainPairView):
-    pass
+    serializer_class = TokenObtainPairSerializer
+    renderer_classes = [JSONRenderer]
+    permission_classes = [AllowAny]
 
 class MyTokenRefreshView(TokenRefreshView):
-    pass
+    serializer_class = TokenRefreshSerializer
+    renderer_classes = [JSONRenderer]
+    permission_classes = [AllowAny]
 
 class RoleViewSet(viewsets.ModelViewSet):
     queryset = Role.objects.all()

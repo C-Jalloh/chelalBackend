@@ -169,9 +169,6 @@ class AuditLog(models.Model):
         ("logout", "Logout"), # Added logout action
         ("other", "Other"),
         ("export", "Export"), # Added export action
-        ("2fa_enable", "2FA Enabled"), # Added 2FA actions
-        ("2fa_disable", "2FA Disabled"),
-        ("2fa_verify", "2FA Verified"),
         ("session_revoke", "Session Revoked"), # Added session action
     ]
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)

@@ -7,14 +7,17 @@ celery
 redis
 channels
 channels-redis
-django-two-factor-auth
-phonenumbers
-django-otp
 pytest
 pytest-django
 requests
 twilio
 drf-nested-routers
-
+django-cors-headers
+django-filter
+django-extensions
+django-storages
+boto3
+django-redis
+django-axes
 
 

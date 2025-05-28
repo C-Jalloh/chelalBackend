@@ -10,7 +10,7 @@ Chelal HMS is a comprehensive Django REST backend for hospital management, inclu
 - Bed/ward management
 - Audit logs, notifications, dashboards
 - Appointment reminders/follow-ups (SMS & email)
-- Role-based access, 2FA, and more
+- Role-based access, and more
 
 ---
 
@@ -19,7 +19,7 @@ Chelal HMS is a comprehensive Django REST backend for hospital management, inclu
 - Advanced pharmacy inventory (batch, FEFO, supplier, reporting)
 - Billing & insurance (service catalog, bills, payments, insurance)
 - Role-specific dashboards
-- Audit logs, session management, 2FA
+- Audit logs, session management
 - Bed/ward management
 - Appointment reminders & follow-ups (SMS/Email)
 - Telemedicine-ready (WebSocket, video-ready)

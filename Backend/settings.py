@@ -44,11 +44,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'core',
     'channels',
-    'two_factor',
-    'two_factor.plugins.phonenumber',
-    'django_otp',
-    'django_otp.plugins.otp_static',
-    'django_otp.plugins.otp_totp',
 ]
 
 MIDDLEWARE = [
@@ -147,6 +142,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -163,11 +159,7 @@ CHANNEL_LAYERS = {
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
-    'two_factor.backends.EnhancedBackend',
 ]
-
-LOGIN_URL = 'two_factor:login'
-LOGIN_REDIRECT_URL = '/'  # Or your desired post-login URL
 
 # Twilio SMS settings
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')

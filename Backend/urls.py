@@ -20,5 +20,4 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
-    # path('account/', include(('two_factor.urls', 'two_factor'), namespace='two_factor')),  # Temporarily disabled for migration
 ]
