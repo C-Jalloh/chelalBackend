@@ -13,6 +13,8 @@ django-otp
 pytest
 pytest-django
 requests
+twilio
+drf-nested-routers
 
 
 
