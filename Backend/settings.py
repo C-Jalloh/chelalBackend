@@ -44,9 +44,11 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'core',
     'channels',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -158,6 +160,7 @@ CHANNEL_LAYERS = {
 }
 
 AUTHENTICATION_BACKENDS = [
+    'core.auth_backends.EmailOrUsernameModelBackend',  # Allow login with email or username
     'django.contrib.auth.backends.ModelBackend',
 ]
 
@@ -191,3 +194,10 @@ else:
     EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
     EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER if 'EMAIL_HOST_USER' in locals() else '')
+
+# CORS settings for local frontend
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+]
+CORS_ALLOW_CREDENTIALS = True

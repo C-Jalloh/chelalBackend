@@ -20,7 +20,7 @@ from .views import (
 
 router = routers.DefaultRouter()
 router.register(r'roles', RoleViewSet)
-router.register(r'users', UserViewSet)
+router.register(r'users', UserViewSet, basename='user')
 router.register(r'patients', PatientViewSet, basename='patient')
 router.register(r'appointments', AppointmentViewSet)
 router.register(r'encounters', EncounterViewSet)

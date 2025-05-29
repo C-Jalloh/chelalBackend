@@ -17,7 +17,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework import status
 from .permissions import IsAdminOrReadOnly, IsDoctorOrReadOnly, IsReceptionistOrReadOnly, PatientPortalPermission
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from django.utils import timezone
 from .rxnorm_utils import get_rxcui_for_drug, check_drug_interactions
 from django.utils.translation import gettext_lazy as _
@@ -34,13 +34,14 @@ from django.contrib.sessions.models import Session
 from django.contrib.auth import get_user_model
 from .twilio_utils import send_sms_via_twilio
 from .email_utils import send_appointment_email
+from .email_token_serializer import EmailTokenObtainPairSerializer
 
 User = get_user_model()
 
 # Create your views here.
 
 class MyTokenObtainPairView(TokenObtainPairView):
-    serializer_class = TokenObtainPairSerializer
+    serializer_class = EmailTokenObtainPairSerializer  # Use custom serializer for email/username login
     renderer_classes = [JSONRenderer]
     permission_classes = [AllowAny]
 
@@ -58,6 +59,11 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAdminOrReadOnly]
+
+    @action(detail=False, methods=['get'], url_path='me', permission_classes=[IsAuthenticated])
+    def me(self, request):
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def deactivate(self, request, pk=None):
@@ -1001,7 +1007,7 @@ class PatientLabOrderViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if user.is_staff:
             return LabOrder.objects.all()
-        return LabOrder.objects.filter(patient__user=user)
+        return LabOrder.objects.filter(encounter__patient__user=user)
 
 class PatientPrescriptionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PrescriptionSerializer
@@ -1030,8 +1036,7 @@ class FinancialReportViewSet(viewsets.ViewSet):
     def receivables_aging(self, request):
         """Accounts receivable aging buckets for unpaid bills."""
         today = timezone.now().date()
-        buckets = [30, 60, 90]
-        aging = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0}
+        buckets = [30, 60]
         qs = Bill.objects.filter(is_paid=False)
         for bill in qs:
             days = (today - bill.created_at.date()).days
