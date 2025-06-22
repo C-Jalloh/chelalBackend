@@ -17,6 +17,10 @@ from .views import (
     SecureMessageViewSet, FinancialReportViewSet, LabTestCatalogViewSet, LabOrderItemViewSet, LabResultValueViewSet,
     LabOrderViewSet, PatientLabHistoryViewSet
 )
+from .views import RegisterView, RoleChangeRequestViewSet, dashboard_stats
+from .views import profile_view, user_preferences_view
+from .views import LoginActivityViewSet, ApiKeyViewSet, FeedbackViewSet, AccountViewSet, DelegateAccessViewSet
+from .views import OrganizationViewSet, OrganizationMembershipViewSet
 
 router = routers.DefaultRouter()
 router.register(r'roles', RoleViewSet)
@@ -65,6 +69,14 @@ router.register(r'financial-reports', FinancialReportViewSet, basename='financia
 router.register(r'lab_tests/catalog', LabTestCatalogViewSet, basename='labtestcatalog')
 router.register(r'lab_order_items', LabOrderItemViewSet, basename='laborderitem')
 router.register(r'lab_result_values', LabResultValueViewSet, basename='labresultvalue')
+router.register(r'role-change-requests', RoleChangeRequestViewSet, basename='rolechangerequest')
+router.register(r'login-activity', LoginActivityViewSet, basename='loginactivity')
+router.register(r'api-keys', ApiKeyViewSet, basename='apikey')
+router.register(r'feedback', FeedbackViewSet, basename='feedback')
+router.register(r'account', AccountViewSet, basename='account')
+router.register(r'delegates', DelegateAccessViewSet, basename='delegateaccess')
+router.register(r'organizations', OrganizationViewSet, basename='organization')
+router.register(r'organization-memberships', OrganizationMembershipViewSet, basename='organizationmembership')
 
 # Patient portal endpoints
 router.register(r'patient-portal/appointments', PatientAppointmentViewSet, basename='patient-portal-appointments')
@@ -79,6 +91,7 @@ patient_router.register(r'consents', ConsentViewSet, basename='patient-consents'
 patient_router.register(r'lab_history', PatientLabHistoryViewSet, basename='patient-lab-history')
 
 urlpatterns = [
+    path('register/', RegisterView.as_view(), name='register'),
     path('', include(router.urls)),
     path('', include(patient_router.urls)),
     path('auth/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -90,5 +103,7 @@ urlpatterns = [
     path('report/top_prescribed_medications/', report_top_prescribed_medications, name='report_top_prescribed_medications'),
     path('dashboard/', dashboard, name='dashboard'),
     path('health/', health_check, name='health-check'),
-    path('patients/export/', PatientViewSet.as_view({'get': 'export_csv'}), name='patient-export'),
+    path('dashboard-stats/', dashboard_stats, name='dashboard-stats'),
+    path('profile/', profile_view, name='profile'),
+    path('preferences/', user_preferences_view, name='user-preferences'),
 ]

@@ -4,14 +4,14 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, Toke
 from rest_framework.renderers import JSONRenderer
 from rest_framework.permissions import AllowAny
 from rest_framework import viewsets, permissions, serializers
-from .models import Role, User, Patient, Appointment, Encounter, Prescription, InventoryItem, Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument, Notification, NoteTemplate, Task, AuditLog, Bed, Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, ServiceCatalog, InsuranceDetail, Bill, BillItem, Payment, AppointmentNotification, TelemedicineSession, SyncConflict, SyncQueueStatus, Consent, Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue
+from .models import Role, User, Patient, Appointment, Encounter, Prescription, InventoryItem, Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument, Notification, NoteTemplate, Task, AuditLog, Bed, Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, ServiceCatalog, InsuranceDetail, Bill, BillItem, Payment, AppointmentNotification, TelemedicineSession, SyncConflict, SyncQueueStatus, Consent, Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue, RoleChangeRequest, LoginActivity, ApiKey, Feedback, DelegateAccess, Organization, OrganizationMembership
 from .serializers import (
     RoleSerializer, UserSerializer, PatientSerializer, AppointmentSerializer,
     EncounterSerializer, PrescriptionSerializer, InventoryItemSerializer,
     VitalsSerializer, MedicalConditionSerializer, SurgicalHistorySerializer, FamilyHistorySerializer, VaccinationSerializer, LabOrderSerializer, PatientDocumentSerializer, NotificationSerializer, NoteTemplateSerializer, TaskSerializer, AuditLogSerializer, BedSerializer, InventoryMedicationSerializer,
     SupplierSerializer, MedicationCategorySerializer, MedicationItemSerializer, StockBatchSerializer, PurchaseOrderSerializer, PurchaseOrderItemSerializer, GoodsReceivedNoteSerializer, GRNItemSerializer, DispensingLogSerializer, StockAdjustmentSerializer,
     ServiceCatalogSerializer, InsuranceDetailSerializer, BillSerializer, BillItemSerializer, PaymentSerializer, AppointmentNotificationSerializer, TelemedicineSessionSerializer, SyncConflictSerializer, SyncQueueStatusSerializer, ConsentSerializer,
-    ReferralSerializer, SchedulableResourceSerializer, ResourceBookingSerializer, SecureMessageSerializer, LabTestCatalogSerializer, LabOrderItemSerializer, LabResultValueSerializer
+    ReferralSerializer, SchedulableResourceSerializer, ResourceBookingSerializer, SecureMessageSerializer, LabTestCatalogSerializer, LabOrderItemSerializer, LabResultValueSerializer, RoleChangeRequestSerializer, UserPreferencesSerializer, LoginActivitySerializer, ApiKeySerializer, FeedbackSerializer, DelegateAccessSerializer, OrganizationSerializer, OrganizationMembershipSerializer
 )
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
@@ -35,6 +35,8 @@ from django.contrib.auth import get_user_model
 from .twilio_utils import send_sms_via_twilio
 from .email_utils import send_appointment_email
 from .email_token_serializer import EmailTokenObtainPairSerializer
+from rest_framework.views import APIView
+from .serializers import RegistrationSerializer
 
 User = get_user_model()
 
@@ -86,6 +88,18 @@ class UserViewSet(viewsets.ModelViewSet):
         user.set_password(new_password)
         user.save()
         return Response({'status': 'password reset', 'new_password': new_password})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
+    def assign_role(self, request, pk=None):
+        user = self.get_object()
+        role_id = request.data.get('role_id')
+        try:
+            role = Role.objects.get(id=role_id)
+        except Role.DoesNotExist:
+            return Response({'detail': 'Role not found.'}, status=404)
+        user.role = role
+        user.save()
+        return Response({'status': 'role assigned', 'role': role.name})
 
 class PatientViewSet(viewsets.ModelViewSet):
     queryset = Patient.objects.all()
@@ -170,8 +184,8 @@ class PatientViewSet(viewsets.ModelViewSet):
             serializer = PatientDocumentSerializer(docs, many=True)
             return Response(serializer.data)
 
-    @action(detail=False, methods=['get'])
-    def export_csv(self, request):
+    @action(detail=False, methods=['get'], url_path='export', url_name='export')
+    def export(self, request):
         """Export patient data as CSV."""
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="patients.csv"'
@@ -783,6 +797,15 @@ class LabResultValueViewSet(viewsets.ModelViewSet):
     serializer_class = LabResultValueSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+class LoginActivityViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = LoginActivity.objects.all().order_by('-timestamp')
+    serializer_class = LoginActivitySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Only allow users to see their own login activity
+        return self.queryset.filter(user=self.request.user)
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def sync_offline_data(request):
@@ -865,30 +888,92 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Appointment, LabOrder, Task, Notification, Bed, MedicationItem, StockBatch, Prescription
+from django.db.models import Sum
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def dashboard_stats(request):
+    today = timezone.now().date()
+    from .models import Patient, User, Bill
+    total_patients = Patient.objects.count()
+    active_users = User.objects.filter(is_active=True).count()
+    revenue_today = Bill.objects.filter(date_issued__date=today).aggregate(total=Sum('total_amount'))['total'] or 0
+    return Response({
+        'total_patients': total_patients,
+        'active_users': active_users,
+        'revenue_today': revenue_today
+    })
+
+@api_view(['GET'])
 def dashboard(request):
     user = request.user
     role = user.role.name if user.role else None
     data = {}
+    today = timezone.now().date()
+    # General: notifications/messages, system health, what's new, birthdays
+    from .models import Notification, AuditLog, Bill, Bed, Patient, User, Appointment, LabOrder, Task, MedicationItem, StockBatch, Prescription
+    from django.db.models import Count, Sum, Q
+    # Recent notifications (last 5)
+    data['notifications'] = Notification.objects.filter(user=user).order_by('-created_at')[:5].values('id', 'message', 'created_at', 'is_read')
+    # System health (simple DB check)
+    data['system_health'] = {'database': 'ok'}
+    # What's new (last 3 audit logs)
+    data['whats_new'] = AuditLog.objects.order_by('-timestamp')[:3].values('action', 'description', 'timestamp')
+    # Birthdays today (patients)
+    data['birthdays_today'] = list(Patient.objects.filter(date_of_birth__month=today.month, date_of_birth__day=today.day).values('first_name', 'last_name'))
+    # Anniversaries (users joined this day)
+    data['anniversaries'] = list(User.objects.filter(date_joined__month=today.month, date_joined__day=today.day).values('first_name', 'last_name'))
+
     if role == 'Doctor':
-        data['today_appointments'] = Appointment.objects.filter(doctor=user, date=timezone.now().date()).count()
-        data['unread_lab_results'] = LabOrder.objects.filter(encounter__doctor=user, status='Ordered').count()
-        data['pending_tasks'] = Task.objects.filter(assignee=user, status='pending').count()
+        data['today_appointments'] = list(Appointment.objects.filter(doctor=user, date=today).values('id', 'patient__first_name', 'patient__last_name', 'time', 'status'))
+        data['unread_lab_results'] = list(LabOrder.objects.filter(encounter__doctor=user, status='Ordered').values('id', 'encounter__patient__first_name', 'encounter__patient__last_name', 'test_type', 'created_at'))
+        data['pending_tasks'] = list(Task.objects.filter(assignee=user, status='pending').values('id', 'title', 'due_date', 'priority'))
+        data['critical_lab_alerts'] = list(LabOrder.objects.filter(encounter__doctor=user, status='Critical').values('id', 'encounter__patient__first_name', 'test_type', 'created_at'))
+        data['quick_links'] = [
+            {'label': 'New Encounter', 'url': '/app/encounters/new'},
+            {'label': 'Write Prescription', 'url': '/app/prescriptions/new'}
+        ]
     elif role == 'Receptionist':
-        data['patient_queue'] = Appointment.objects.filter(date=timezone.now().date(), status='scheduled').count()
-        data['today_schedule'] = Appointment.objects.filter(date=timezone.now().date()).count()
-        data['pending_registrations'] = Patient.objects.filter(created_at__date=timezone.now().date()).count()
+        data['patient_queue'] = list(Appointment.objects.filter(date=today, status='scheduled').values('id', 'patient__first_name', 'patient__last_name', 'time'))
+        data['today_schedule'] = list(Appointment.objects.filter(date=today).values('id', 'patient__first_name', 'doctor__first_name', 'time', 'status'))
+        data['pending_registrations'] = list(Patient.objects.filter(created_at__date=today).values('id', 'first_name', 'last_name'))
+        data['missing_insurance'] = list(Patient.objects.filter(Q(insurance_detail__isnull=True) | Q(insurance_detail__policy_number='')).values('id', 'first_name', 'last_name'))
+        data['quick_actions'] = [
+            {'label': 'Register Patient', 'url': '/app/patients/new'},
+            {'label': 'Schedule Appointment', 'url': '/app/appointments/new'}
+        ]
     elif role == 'Pharmacist':
-        data['low_stock_alerts'] = MedicationItem.objects.filter(total_quantity__lt=models.F('reorder_level')).count()
-        data['near_expiry_items'] = StockBatch.objects.filter(expiry_date__lte=timezone.now().date() + timezone.timedelta(days=30)).count()
-        data['pending_prescriptions'] = Prescription.objects.filter(created_at__date=timezone.now().date()).count()
+        data['low_stock_alerts'] = list(MedicationItem.objects.filter(total_quantity__lt=models.F('reorder_level')).values('id', 'generic_name', 'total_quantity', 'reorder_level'))
+        data['near_expiry_items'] = list(StockBatch.objects.filter(expiry_date__lte=today + timezone.timedelta(days=30)).values('id', 'medication_item__generic_name', 'expiry_date', 'current_quantity'))
+        data['pending_prescriptions'] = list(Prescription.objects.filter(created_at__date=today).values('id', 'encounter__patient__first_name', 'medication_name', 'created_at'))
+        data['recent_purchase_orders'] = list(PurchaseOrder.objects.order_by('-created_at')[:5].values('id', 'supplier__name', 'created_at', 'status'))
+        data['quick_links'] = [
+            {'label': 'Add Stock Batch', 'url': '/app/pharmacy/grns/new'},
+            {'label': 'Process Prescription', 'url': '/app/pharmacy/dispensing'}
+        ]
     elif role == 'Admin':
         data['total_patients'] = Patient.objects.count()
         data['active_users'] = User.objects.filter(is_active=True).count()
-        data['revenue_today'] = Bill.objects.filter(date_issued__date=timezone.now().date()).aggregate(total=models.Sum('total_amount'))['total'] or 0
+        data['revenue_today'] = Bill.objects.filter(date_issued__date=today).aggregate(total=Sum('total_amount'))['total'] or 0
+        # Trends: patient registrations and revenue (last 7 days)
+        last_7 = [today - timezone.timedelta(days=i) for i in range(6, -1, -1)]
+        data['patient_registrations_trend'] = [
+            {'date': d, 'count': Patient.objects.filter(created_at__date=d).count()} for d in last_7
+        ]
+        data['revenue_trend'] = [
+            {'date': d, 'total': Bill.objects.filter(date_issued__date=d).aggregate(total=Sum('total_amount'))['total'] or 0} for d in last_7
+        ]
+        # Most active users (by login or actions, here by last_login)
+        data['most_active_users'] = list(User.objects.filter(is_active=True).order_by('-last_login')[:5].values('id', 'first_name', 'last_name', 'last_login'))
+        # System alerts (last 3 audit logs)
+        data['system_alerts'] = list(AuditLog.objects.order_by('-timestamp')[:3].values('action', 'description', 'timestamp'))
+        # Revenue breakdown by department (dummy: by bill items' service type if exists)
+        data['revenue_breakdown'] = list(Bill.objects.filter(date_issued__date=today).values('department').annotate(total=Sum('total_amount')))
+        data['quick_links'] = [
+            {'label': 'User Management', 'url': '/app/users'},
+            {'label': 'Reports', 'url': '/app/reports'},
+            {'label': 'Settings', 'url': '/app/settings'}
+        ]
     else:
         data['message'] = 'No dashboard data for this role.'
     return Response(data)
@@ -1035,8 +1120,8 @@ class FinancialReportViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def receivables_aging(self, request):
         """Accounts receivable aging buckets for unpaid bills."""
+        aging = {"0-30": 0, "31-60": 0, "61-90": 0, "90+": 0}
         today = timezone.now().date()
-        buckets = [30, 60]
         qs = Bill.objects.filter(is_paid=False)
         for bill in qs:
             days = (today - bill.created_at.date()).days
@@ -1093,3 +1178,161 @@ class PatientLabHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         patient_id = self.kwargs['patient_pk'] # Assuming nested router lookup
         return LabOrder.objects.filter(encounter__patient__id=patient_id).order_by('-order_date')
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegistrationSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response({'message': 'Registration successful'}, status=201)
+        return Response(serializer.errors, status=400)
+
+class RoleChangeRequestViewSet(viewsets.ModelViewSet):
+    queryset = RoleChangeRequest.objects.all().select_related('user', 'requested_role')
+    serializer_class = RoleChangeRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role and user.role.name == 'Admin':
+            return RoleChangeRequest.objects.all().select_related('user', 'requested_role')
+        return RoleChangeRequest.objects.filter(user=user).select_related('user', 'requested_role')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user, status='pending')
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
+    def approve(self, request, pk=None):
+        req = self.get_object()
+        if req.status != 'pending':
+            return Response({'detail': 'Already reviewed.'}, status=400)
+        req.status = 'approved'
+        req.admin_response = request.data.get('admin_response', '')
+        req.reviewed_at = timezone.now()
+        req.save()
+        # Actually assign the role
+        req.user.role = req.requested_role
+        req.user.save()
+        return Response({'status': 'approved'})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
+    def reject(self, request, pk=None):
+        req = self.get_object()
+        if req.status != 'pending':
+            return Response({'detail': 'Already reviewed.'}, status=400)
+        req.status = 'rejected'
+        req.admin_response = request.data.get('admin_response', '')
+        req.reviewed_at = timezone.now()
+        req.save()
+        return Response({'status': 'rejected'})
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def profile_view(request):
+    """Return the current user's profile."""
+    serializer = UserSerializer(request.user)
+    return Response(serializer.data)
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def user_preferences_view(request):
+    user = request.user
+    if request.method == 'GET':
+        serializer = UserPreferencesSerializer(user)
+        return Response(serializer.data)
+    elif request.method == 'PUT':
+        serializer = UserPreferencesSerializer(user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+class ApiKeyViewSet(viewsets.ModelViewSet):
+    serializer_class = ApiKeySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ApiKey.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+class FeedbackViewSet(viewsets.ModelViewSet):
+    serializer_class = FeedbackSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Users see their own feedback; admins see all
+        if self.request.user.is_staff:
+            return Feedback.objects.all().order_by('-created_at')
+        return Feedback.objects.filter(user=self.request.user).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+from rest_framework.decorators import action
+from django.http import FileResponse
+import io
+import csv
+
+class AccountViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['delete'], url_path='delete', permission_classes=[IsAuthenticated])
+    def delete_account(self, request):
+        user = request.user
+        user.is_active = False
+        user.save()
+        return Response({'status': 'account deactivated'}, status=204)
+
+    @action(detail=False, methods=['get'], url_path='download-data', permission_classes=[IsAuthenticated])
+    def download_data(self, request):
+        user = request.user
+        # Example: Download basic user info and feedback as CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Field', 'Value'])
+        writer.writerow(['Username', user.username])
+        writer.writerow(['Email', user.email])
+        writer.writerow(['First Name', user.first_name])
+        writer.writerow(['Last Name', user.last_name])
+        writer.writerow(['Language', user.language_preference])
+        writer.writerow(['Preferences', user.preferences])
+        # Feedback
+        writer.writerow([])
+        writer.writerow(['Feedback'])
+        writer.writerow(['Message', 'Contact Email', 'Created At', 'Resolved'])
+        for fb in user.feedbacks.all():
+            writer.writerow([fb.message, fb.contact_email, fb.created_at, fb.resolved])
+        output.seek(0)
+        response = FileResponse(io.BytesIO(output.getvalue().encode()), as_attachment=True, filename='user_data.csv')
+        return response
+
+class DelegateAccessViewSet(viewsets.ModelViewSet):
+    serializer_class = DelegateAccessSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Show delegates for the current user, and where the user is a delegate
+        return DelegateAccess.objects.filter(models.Q(user=self.request.user) | models.Q(delegate=self.request.user))
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+class OrganizationViewSet(viewsets.ModelViewSet):
+    queryset = Organization.objects.all()
+    serializer_class = OrganizationSerializer
+    permission_classes = [IsAuthenticated]
+
+class OrganizationMembershipViewSet(viewsets.ModelViewSet):
+    serializer_class = OrganizationMembershipSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Show memberships for the current user
+        return OrganizationMembership.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

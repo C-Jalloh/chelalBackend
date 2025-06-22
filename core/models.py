@@ -1,6 +1,8 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.conf import settings
+import secrets
+from django.utils import timezone
 
 class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
@@ -12,6 +14,11 @@ class Role(models.Model):
 class User(AbstractUser):
     role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, blank=True)
     language_preference = models.CharField(max_length=10, default='en', choices=[('en', 'English'), ('fr', 'French'), ('sw', 'Swahili')])
+    preferences = models.JSONField(default=dict, blank=True, null=True)  # For theme, etc.
+    profile_image = models.ImageField(upload_to='profile_images/', blank=True, null=True)
+    two_factor_enabled = models.BooleanField(default=False)
+    two_factor_secret = models.CharField(max_length=64, blank=True, null=True)
+    # Future: api_keys, delegates, etc.
 
 class Patient(models.Model):
     unique_id = models.CharField(max_length=32, unique=True)
@@ -41,6 +48,10 @@ class Appointment(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="scheduled")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        # Show patient, doctor, date, and status for clarity
+        return f"{self.patient.first_name} {self.patient.last_name} with Dr. {self.doctor.get_full_name() or self.doctor.username} on {self.date} at {self.time} ({self.status})"
 
 class Encounter(models.Model):
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
@@ -534,3 +545,86 @@ class LabResultValue(models.Model):
 
     def __str__(self):
         return f"{self.parameter_name}: {self.value_numeric or self.value_text} {self.units}"
+
+class RoleChangeRequest(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='role_change_requests')
+    requested_role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    reason = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')], default='pending')
+    admin_response = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} requests {self.requested_role.name} ({self.status})"
+
+class LoginActivity(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='login_activities')
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    status = models.CharField(max_length=16, choices=[('success', 'Success'), ('failure', 'Failure')], default='success')
+
+    def __str__(self):
+        return f"{self.user.username} - {self.timestamp} - {self.status}"
+
+class ApiKey(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_keys')
+    name = models.CharField(max_length=100, help_text='Label for this API key')
+    key = models.CharField(max_length=64, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = secrets.token_hex(32)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.user.username})"
+
+class Feedback(models.Model):
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks')
+    message = models.TextField()
+    contact_email = models.EmailField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved = models.BooleanField(default=False)
+    resolution_notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"Feedback from {self.user.username if self.user else 'Anonymous'} at {self.created_at}"
+
+class DelegateAccess(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delegates')  # The account owner
+    delegate = models.ForeignKey(User, on_delete=models.CASCADE, related_name='proxy_for')  # The delegate/proxy
+    can_manage_schedule = models.BooleanField(default=False)
+    can_view_data = models.BooleanField(default=True)
+    can_act_as_user = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    revoked = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.delegate.username} as delegate for {self.user.username}"
+
+class Organization(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+    address = models.CharField(max_length=255, blank=True)
+    contact_email = models.EmailField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.name
+
+class OrganizationMembership(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='organization_memberships')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='members')
+    role = models.CharField(max_length=64, blank=True)  # e.g. Admin, Doctor, Nurse
+    is_active = models.BooleanField(default=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} in {self.organization.name} as {self.role}"

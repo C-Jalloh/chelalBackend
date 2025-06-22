@@ -3,7 +3,8 @@ from .models import (
     Role, User, Patient, Appointment, Encounter, Prescription, InventoryItem,
     Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument,
     Notification, NoteTemplate, Task, AuditLog, Bed,
-    Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, AppointmentNotification
+    Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, AppointmentNotification, LoginActivity, ApiKey, Feedback, DelegateAccess,
+    Organization, OrganizationMembership
 )
 
 admin.site.register(Role)
@@ -36,3 +37,9 @@ admin.site.register(GRNItem)
 admin.site.register(DispensingLog)
 admin.site.register(StockAdjustment)
 admin.site.register(AppointmentNotification)
+admin.site.register(LoginActivity)
+admin.site.register(ApiKey)
+admin.site.register(Feedback)
+admin.site.register(DelegateAccess)
+admin.site.register(Organization)
+admin.site.register(OrganizationMembership)

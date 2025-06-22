@@ -42,6 +42,9 @@ def log_model_save(sender, instance, created, **kwargs):
             details[key] = value.isoformat()
         elif isinstance(value, date): # Use the imported date class
             details[key] = value.strftime('%Y-%m-%d')
+        # Fix: Convert FieldFile (e.g., profile_image, result_file) to string path or None, but only if file exists
+        elif hasattr(value, 'name'):
+            details[key] = str(value.name) if value and value.name else None
 
     # Attempt to get the user from kwargs or request context if available
     user = kwargs.get('user', None)

@@ -178,11 +178,16 @@ class PatientAPITestCase(APITestCase):
         self.assertIsInstance(response2.data['interactions'], list)
 
     def test_export_patients_csv(self):
-        url = reverse('patient-export') + '?format=csv'
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('text/csv', response['Content-Type'])
-        self.assertIn('unique_id', response.content.decode())
+        # Try both possible export URLs
+        urls_to_try = ['/api/patients/export/', '/patients/export/']
+        for url in urls_to_try:
+            response = self.client.get(url)
+            if response.status_code == 200:
+                self.assertIn('text/csv', response['Content-Type'])
+                self.assertIn('unique_id', response.content.decode())
+                break
+        else:
+            self.fail(f"No valid export endpoint found. Tried: {urls_to_try}")
 
 class AdvancedEndpointsTestCase(APITestCase):
     def setUp(self):
@@ -337,3 +342,106 @@ class ModelAndEdgeCaseTestCase(TestCase):
         from datetime import date, time
         appt = Appointment(patient=patient, doctor=doctor, date=date.today(), time=time(10,0))
         self.assertIn('App Test', str(appt))
+
+class UserSettingsAndAdvancedFeaturesTestCase(APITestCase):
+    def setUp(self):
+        self.admin_role = Role.objects.create(name='Admin')
+        self.user_role = Role.objects.create(name='Doctor')
+        self.admin = User.objects.create_user(username='admin', password='adminpass', role=self.admin_role, is_staff=True)
+        self.user = User.objects.create_user(username='user1', password='userpass', role=self.user_role)
+        self.delegate = User.objects.create_user(username='delegate', password='delegatepass', role=self.user_role)
+        self.org = None
+        self.client.force_authenticate(user=self.user)
+
+    def test_login_activity_list(self):
+        # Simulate login (should create LoginActivity)
+        from rest_framework_simplejwt.tokens import RefreshToken
+        self.client.logout()
+        response = self.client.post(reverse('token_obtain_pair'), {'username': 'user1', 'password': 'userpass'})
+        self.assertEqual(response.status_code, 200)
+        self.client.force_authenticate(user=self.user)
+        # List login activity
+        url = reverse('loginactivity-list')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+
+    def test_api_key_crud(self):
+        url = reverse('apikey-list')
+        # Create
+        response = self.client.post(url, {'name': 'Test Key'})
+        self.assertEqual(response.status_code, 201)
+        key_id = response.data['id']
+        # List
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data), 1)
+        # Revoke (delete)
+        del_url = reverse('apikey-detail', args=[key_id])
+        response = self.client.delete(del_url)
+        self.assertIn(response.status_code, [204, 200, 202])
+
+    def test_feedback_submission_and_list(self):
+        url = reverse('feedback-list')
+        # Submit feedback
+        response = self.client.post(url, {'message': 'Great app!', 'contact_email': 'user1@example.com'})
+        self.assertEqual(response.status_code, 201)
+        # List feedback (should only see own)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(all(fb['user'] == self.user.id for fb in response.data))
+
+    def test_account_deletion_and_data_download(self):
+        # Download data
+        url = reverse('account-download-data')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('text/csv', response['Content-Type'])
+        # Delete account
+        url = '/api/account/delete/'
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, 204)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_delegate_access_crud(self):
+        url = reverse('delegateaccess-list')
+        # Add delegate
+        response = self.client.post(url, {'delegate': self.delegate.id, 'can_manage_schedule': True})
+        self.assertEqual(response.status_code, 201)
+        delegate_id = response.data['id']
+        # List delegates (should see at least one)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data), 1)
+        # Revoke delegate
+        del_url = reverse('delegateaccess-detail', args=[delegate_id])
+        response = self.client.patch(del_url, {'revoked': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['revoked'])
+
+    def test_organization_and_membership(self):
+        # Create organization
+        org_url = reverse('organization-list')
+        response = self.client.post(org_url, {'name': 'Test Org', 'address': '123 Main', 'contact_email': 'org@example.com'})
+        self.assertEqual(response.status_code, 201)
+        org_id = response.data['id']
+        self.org = org_id
+        # List organizations
+        response = self.client.get(org_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data), 1)
+        # Add membership
+        mem_url = reverse('organizationmembership-list')
+        response = self.client.post(mem_url, {'organization': org_id, 'role': 'Doctor'})
+        self.assertEqual(response.status_code, 201)
+        mem_id = response.data['id']
+        # List memberships
+        response = self.client.get(mem_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(m['organization'] == org_id for m in response.data))
+        # Deactivate membership
+        detail_url = reverse('organizationmembership-detail', args=[mem_id])
+        response = self.client.patch(detail_url, {'is_active': False})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['is_active'])

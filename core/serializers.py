@@ -7,8 +7,11 @@ from .models import (
     GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment,
     ServiceCatalog, InsuranceDetail, Bill, BillItem, Payment, AppointmentNotification,
     TelemedicineSession, SyncConflict, SyncQueueStatus, Consent,
-    Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue
+    Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue,
+    RoleChangeRequest, LoginActivity, ApiKey, Feedback, DelegateAccess, Organization, OrganizationMembership
 )
+from datetime import date, timedelta
+from django.contrib.auth import get_user_model
 
 class RoleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -17,14 +20,33 @@ class RoleSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     role = RoleSerializer(read_only=True)
+    profile_image = serializers.ImageField(required=False, allow_null=True)
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role', 'language_preference', 'preferences', 'profile_image', 'two_factor_enabled']
 
 class PatientSerializer(serializers.ModelSerializer):
+    has_recent_appointment = serializers.SerializerMethodField()
     class Meta:
         model = Patient
         fields = '__all__'
+        extra_kwargs = {
+            'unique_id': {'required': False, 'read_only': True},
+        }
+
+    def get_has_recent_appointment(self, obj):
+        recent_cutoff = date.today() - timedelta(days=30)
+        return Appointment.objects.filter(
+            patient=obj,
+            date__gte=recent_cutoff
+        ).exists()
+
+    def create(self, validated_data):
+        # Auto-generate unique_id if not provided
+        if 'unique_id' not in validated_data or not validated_data['unique_id']:
+            from django.utils.crypto import get_random_string
+            validated_data['unique_id'] = get_random_string(8).upper()
+        return super().create(validated_data)
 
 class AppointmentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -286,3 +308,84 @@ class LabResultValueSerializer(serializers.ModelSerializer):
                     )
 
         return lab_result_value
+
+class RegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True, min_length=6)
+    role = serializers.PrimaryKeyRelatedField(queryset=Role.objects.all(), required=False)
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'password', 'role']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+
+class RoleChangeRequestSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    requested_role = RoleSerializer(read_only=True)
+    requested_role_id = serializers.PrimaryKeyRelatedField(queryset=Role.objects.all(), source='requested_role', write_only=True)
+
+    class Meta:
+        model = RoleChangeRequest
+        fields = ['id', 'user', 'requested_role', 'requested_role_id', 'reason', 'status', 'admin_response', 'created_at', 'reviewed_at']
+        read_only_fields = ['status', 'admin_response', 'created_at', 'reviewed_at', 'user', 'requested_role']
+
+class UserPreferencesSerializer(serializers.ModelSerializer):
+    profile_image = serializers.ImageField(required=False, allow_null=True)
+    class Meta:
+        model = User
+        fields = ['preferences', 'language_preference', 'profile_image', 'two_factor_enabled']
+
+    def update(self, instance, validated_data):
+        # Handle profile image update
+        profile_image = validated_data.pop('profile_image', None)
+        if profile_image:
+            instance.profile_image = profile_image
+        # Update preferences and other fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+class LoginActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoginActivity
+        fields = ['id', 'user', 'timestamp', 'ip_address', 'user_agent', 'status']
+        read_only_fields = ['id', 'user', 'timestamp', 'ip_address', 'user_agent', 'status']
+
+class ApiKeySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApiKey
+        fields = ['id', 'user', 'name', 'key', 'created_at', 'last_used_at', 'is_active']
+        read_only_fields = ['id', 'user', 'key', 'created_at', 'last_used_at']
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Feedback
+        fields = ['id', 'user', 'message', 'contact_email', 'created_at', 'resolved', 'resolution_notes']
+        read_only_fields = ['id', 'user', 'created_at', 'resolved', 'resolution_notes']
+
+class DelegateAccessSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    delegate_username = serializers.CharField(source='delegate.username', read_only=True)
+    class Meta:
+        model = DelegateAccess
+        fields = ['id', 'user', 'user_username', 'delegate', 'delegate_username', 'can_manage_schedule', 'can_view_data', 'can_act_as_user', 'created_at', 'revoked', 'revoked_at']
+        read_only_fields = ['id', 'user', 'user_username', 'delegate_username', 'created_at', 'revoked_at']
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['id', 'name', 'address', 'contact_email', 'created_at', 'is_active']
+
+class OrganizationMembershipSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    class Meta:
+        model = OrganizationMembership
+        fields = ['id', 'user', 'user_username', 'organization', 'organization_name', 'role', 'is_active', 'joined_at', 'left_at']
+        read_only_fields = ['id', 'user', 'user_username', 'organization_name', 'joined_at', 'left_at']
