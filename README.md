@@ -12,6 +12,20 @@ Chelal HMS is a comprehensive Django REST backend for hospital management, inclu
 - Appointment reminders/follow-ups (SMS & email)
 - Role-based access, and more
 
+## 📚 Documentation
+
+**Complete documentation is available in the `/docs` directory:**
+
+- **[📖 Project Overview](./docs/overview/README.md)** - System overview and objectives
+- **[🏗️ Architecture Guide](./docs/architecture/README.md)** - Technical architecture and design
+- **[🚀 Installation Guide](./docs/installation/README.md)** - Setup and deployment instructions
+- **[⚡ Quick Start](./docs/quickstart/README.md)** - Get started in 5 minutes
+- **[💻 Development Guide](./docs/development/README.md)** - Development environment and workflows
+- **[🔒 Security Guide](./docs/security/README.md)** - Security implementation and compliance
+- **[🗄️ Data Models](./docs/data-models/README.md)** - Database schema and relationships
+- **[🔌 API Reference](./docs/api/README.md)** - Complete API documentation
+- **[👥 User Guides](./docs/user-guides/README.md)** - End-user documentation
+
 ---
 
 ## Features
