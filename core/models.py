@@ -5,6 +5,7 @@ import secrets
 from django.utils import timezone
 
 class Role(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
 
@@ -12,6 +13,7 @@ class Role(models.Model):
         return self.name
 
 class User(AbstractUser):
+    id = models.AutoField(primary_key=True)
     role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, blank=True)
     language_preference = models.CharField(max_length=10, default='en', choices=[('en', 'English'), ('fr', 'French'), ('sw', 'Swahili')])
     preferences = models.JSONField(default=dict, blank=True, null=True)  # For theme, etc.
@@ -21,6 +23,7 @@ class User(AbstractUser):
     # Future: api_keys, delegates, etc.
 
 class Patient(models.Model):
+    id = models.AutoField(primary_key=True)
     unique_id = models.CharField(max_length=32, unique=True)
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
@@ -36,6 +39,7 @@ class Patient(models.Model):
         return f"{self.first_name} {self.last_name} ({self.unique_id})"
 
 class Appointment(models.Model):
+    id = models.AutoField(primary_key=True)
     STATUS_CHOICES = [
         ("scheduled", "Scheduled"),
         ("completed", "Completed"),
@@ -54,6 +58,7 @@ class Appointment(models.Model):
         return f"{self.patient.first_name} {self.patient.last_name} with Dr. {self.doctor.get_full_name() or self.doctor.username} on {self.date} at {self.time} ({self.status})"
 
 class Encounter(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
     appointment = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True)
     doctor = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role__name': 'Doctor'})
@@ -63,6 +68,7 @@ class Encounter(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class Prescription(models.Model):
+    id = models.AutoField(primary_key=True)
     encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE)
     medication_name = models.CharField(max_length=255)
     dosage = models.CharField(max_length=100)
@@ -71,6 +77,7 @@ class Prescription(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class InventoryItem(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True)
     quantity = models.PositiveIntegerField(default=0)
@@ -81,6 +88,7 @@ class InventoryItem(models.Model):
         return f"{self.name} ({self.quantity} {self.unit})"
 
 class Vitals(models.Model):
+    id = models.AutoField(primary_key=True)
     encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, related_name='vitals')
     systolic_bp = models.PositiveIntegerField()
     diastolic_bp = models.PositiveIntegerField()
@@ -100,24 +108,28 @@ class Vitals(models.Model):
         super().save(*args, **kwargs)
 
 class MedicalCondition(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='medical_conditions')
     name = models.CharField(max_length=255)
     notes = models.TextField(blank=True)
     diagnosed_at = models.DateField(null=True, blank=True)
 
 class SurgicalHistory(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='surgical_history')
     procedure = models.CharField(max_length=255)
     notes = models.TextField(blank=True)
     date = models.DateField(null=True, blank=True)
 
 class FamilyHistory(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='family_history')
     relation = models.CharField(max_length=100)
     condition = models.CharField(max_length=255)
     notes = models.TextField(blank=True)
 
 class Vaccination(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='vaccinations')
     vaccine_name = models.CharField(max_length=255)
     date_administered = models.DateField()
@@ -125,6 +137,7 @@ class Vaccination(models.Model):
     administered_by = models.CharField(max_length=255, blank=True)
 
 class LabOrder(models.Model):
+    id = models.AutoField(primary_key=True)
     encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, related_name='lab_orders')
     test_name = models.CharField(max_length=255)
     specimen_type = models.CharField(max_length=100, blank=True)
@@ -134,12 +147,14 @@ class LabOrder(models.Model):
     result_file = models.FileField(upload_to='lab_results/', blank=True, null=True)
 
 class PatientDocument(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='documents')
     file = models.FileField(upload_to='patient_documents/')
     description = models.CharField(max_length=255, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
 class Notification(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     message = models.TextField()
     type = models.CharField(max_length=50, blank=True)
@@ -148,6 +163,7 @@ class Notification(models.Model):
     related_object = models.CharField(max_length=100, blank=True)  # e.g., 'Appointment:5'
 
 class NoteTemplate(models.Model):
+    id = models.AutoField(primary_key=True)
     title = models.CharField(max_length=255)
     content = models.TextField()
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -155,6 +171,7 @@ class NoteTemplate(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Task(models.Model):
+    id = models.AutoField(primary_key=True)
     STATUS_CHOICES = [
         ("pending", "Pending"),
         ("in_progress", "In Progress"),
@@ -171,6 +188,7 @@ class Task(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class AuditLog(models.Model):
+    id = models.AutoField(primary_key=True)
     ACTION_CHOICES = [
         ("view", "View"),
         ("edit", "Edit"),
@@ -191,6 +209,7 @@ class AuditLog(models.Model):
     details = models.JSONField(blank=True, null=True) # Add JSONField for details
 
 class Ward(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     capacity = models.PositiveIntegerField(default=0)
@@ -199,6 +218,7 @@ class Ward(models.Model):
         return self.name
 
 class Bed(models.Model):
+    id = models.AutoField(primary_key=True)
     STATUS_CHOICES = [
         ("available", "Available"),
         ("occupied", "Occupied"),
@@ -218,6 +238,7 @@ class Bed(models.Model):
         return f"Bed {self.number} ({self.ward.name if self.ward else 'No Ward'})"
 
 class Supplier(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=50, blank=True)
@@ -228,12 +249,14 @@ class Supplier(models.Model):
         return self.name
 
 class MedicationCategory(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
 
     def __str__(self):
         return self.name
 
 class MedicationItem(models.Model):
+    id = models.AutoField(primary_key=True)
     generic_name = models.CharField(max_length=255)
     brand_name = models.CharField(max_length=255, blank=True)
     formulation = models.CharField(max_length=50, choices=[('Tablet','Tablet'),('Syrup','Syrup'),('Injection','Injection'),('Capsule','Capsule'),('Other','Other')])
@@ -253,6 +276,7 @@ class MedicationItem(models.Model):
         return f"{self.generic_name} ({self.strength})"
 
 class StockBatch(models.Model):
+    id = models.AutoField(primary_key=True)
     medication_item = models.ForeignKey(MedicationItem, on_delete=models.CASCADE, related_name='batches')
     batch_number = models.CharField(max_length=100)
     expiry_date = models.DateField()
@@ -269,6 +293,7 @@ class StockBatch(models.Model):
         return f"{self.medication_item} - Batch {self.batch_number}"
 
 class PurchaseOrder(models.Model):
+    id = models.AutoField(primary_key=True)
     STATUS_CHOICES = [
         ('Pending', 'Pending'),
         ('Partially Received', 'Partially Received'),
@@ -284,11 +309,13 @@ class PurchaseOrder(models.Model):
         return f"PO#{self.id} - {self.supplier.name}"
 
 class PurchaseOrderItem(models.Model):
+    id = models.AutoField(primary_key=True)
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     medication_item = models.ForeignKey(MedicationItem, on_delete=models.CASCADE)
     quantity_ordered = models.PositiveIntegerField()
 
 class GoodsReceivedNote(models.Model):
+    id = models.AutoField(primary_key=True)
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.SET_NULL, null=True, blank=True)
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
     grn_date = models.DateField(auto_now_add=True)
@@ -298,6 +325,7 @@ class GoodsReceivedNote(models.Model):
         return f"GRN#{self.id} - {self.supplier.name}"
 
 class GRNItem(models.Model):
+    id = models.AutoField(primary_key=True)
     grn = models.ForeignKey(GoodsReceivedNote, on_delete=models.CASCADE, related_name='items')
     medication_item = models.ForeignKey(MedicationItem, on_delete=models.CASCADE)
     batch_number = models.CharField(max_length=100)
@@ -305,6 +333,7 @@ class GRNItem(models.Model):
     quantity_received = models.PositiveIntegerField()
 
 class DispensingLog(models.Model):
+    id = models.AutoField(primary_key=True)
     prescription = models.ForeignKey(Prescription, on_delete=models.CASCADE)
     stock_batch = models.ForeignKey(StockBatch, on_delete=models.CASCADE)
     quantity_dispensed = models.PositiveIntegerField()
@@ -312,6 +341,7 @@ class DispensingLog(models.Model):
     dispense_date = models.DateTimeField(auto_now_add=True)
 
 class StockAdjustment(models.Model):
+    id = models.AutoField(primary_key=True)
     ADJUSTMENT_TYPE_CHOICES = [
         ('Damaged', 'Damaged'),
         ('Expired-Discarded', 'Expired-Discarded'),
@@ -327,6 +357,7 @@ class StockAdjustment(models.Model):
     adjustment_date = models.DateTimeField(auto_now_add=True)
 
 class ServiceCatalog(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -336,6 +367,7 @@ class ServiceCatalog(models.Model):
         return self.name
 
 class InsuranceDetail(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='insurance_details')
     provider = models.CharField(max_length=255)
     policy_number = models.CharField(max_length=100)
@@ -346,6 +378,7 @@ class InsuranceDetail(models.Model):
         return f"{self.provider} - {self.policy_number}"
 
 class Bill(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='bills')
     encounter = models.ForeignKey(Encounter, on_delete=models.SET_NULL, null=True, blank=True)
     date_issued = models.DateTimeField(auto_now_add=True)
@@ -357,6 +390,7 @@ class Bill(models.Model):
         return f"Bill #{self.id} for {self.patient}"
 
 class BillItem(models.Model):
+    id = models.AutoField(primary_key=True)
     bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='items')
     service = models.ForeignKey(ServiceCatalog, on_delete=models.SET_NULL, null=True, blank=True)
     description = models.CharField(max_length=255)
@@ -367,6 +401,7 @@ class BillItem(models.Model):
         return f"{self.description} x{self.quantity}"
 
 class Payment(models.Model):
+    id = models.AutoField(primary_key=True)
     bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_date = models.DateTimeField(auto_now_add=True)
@@ -378,6 +413,7 @@ class Payment(models.Model):
         return f"Payment {self.amount} for Bill #{self.bill.id}"
 
 class AppointmentNotification(models.Model):
+    id = models.AutoField(primary_key=True)
     NOTIFICATION_TYPE_CHOICES = [
         ("reminder", "Reminder"),
         ("followup", "Follow-up"),
@@ -401,6 +437,7 @@ class AppointmentNotification(models.Model):
         return f"{self.notification_type} for {self.appointment} via {self.channel} ({self.status})"
 
 class TelemedicineSession(models.Model):
+    id = models.AutoField(primary_key=True)
     appointment = models.OneToOneField('Appointment', on_delete=models.CASCADE, related_name='telemedicine_session')
     scheduled_start = models.DateTimeField()
     scheduled_end = models.DateTimeField(null=True, blank=True)
@@ -416,6 +453,7 @@ class TelemedicineSession(models.Model):
         return f"TelemedicineSession for Appointment {self.appointment_id}"
 
 class SyncConflict(models.Model):
+    id = models.AutoField(primary_key=True)
     model_name = models.CharField(max_length=128)
     record_id = models.CharField(max_length=64)
     field = models.CharField(max_length=64)
@@ -433,6 +471,7 @@ class SyncConflict(models.Model):
         return f"Conflict {self.model_name}:{self.record_id} ({self.field})"
 
 class SyncQueueStatus(models.Model):
+    id = models.AutoField(primary_key=True)
     device_id = models.CharField(max_length=64)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     queue_length = models.IntegerField(default=0)
@@ -445,6 +484,7 @@ class SyncQueueStatus(models.Model):
         return f"SyncQueueStatus for {self.device_id} ({self.user})"
 
 class Consent(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, related_name='consents')
     consent_type = models.CharField(max_length=64, choices=[('treatment', 'Treatment'), ('data_processing', 'Data Processing'), ('research', 'Research')])
     given = models.BooleanField(default=True)
@@ -457,6 +497,7 @@ class Consent(models.Model):
         return f"Consent: {self.patient} - {self.consent_type} ({'Given' if self.given else 'Revoked'})"
 
 class Referral(models.Model):
+    id = models.AutoField(primary_key=True)
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, related_name='referrals')
     referring_doctor_details = models.CharField(max_length=255)
     referred_to_doctor_details = models.CharField(max_length=255)
@@ -470,6 +511,7 @@ class Referral(models.Model):
         return f"Referral for {self.patient} to {self.referred_to_doctor_details} ({self.status})"
 
 class SchedulableResource(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=128)
     resource_type = models.CharField(max_length=64, choices=[('Operating Room', 'Operating Room'), ('Equipment', 'Equipment'), ('Other', 'Other')])
     description = models.TextField(blank=True, null=True)
@@ -479,6 +521,7 @@ class SchedulableResource(models.Model):
         return f"{self.name} ({self.resource_type})"
 
 class ResourceBooking(models.Model):
+    id = models.AutoField(primary_key=True)
     resource = models.ForeignKey(SchedulableResource, on_delete=models.CASCADE, related_name='bookings')
     booked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     patient = models.ForeignKey('Patient', on_delete=models.SET_NULL, null=True, blank=True)
@@ -493,6 +536,7 @@ class ResourceBooking(models.Model):
         return f"{self.resource} booking for {self.patient} ({self.status})"
 
 class SecureMessage(models.Model):
+    id = models.AutoField(primary_key=True)
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_messages')
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='received_messages')
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, related_name='messages', null=True, blank=True)
@@ -507,6 +551,7 @@ class SecureMessage(models.Model):
         return f"Message from {self.sender} to {self.recipient} ({'read' if self.is_read else 'unread'})"
 
 class LabTestCatalog(models.Model):
+    id = models.AutoField(primary_key=True)
     test_code = models.CharField(max_length=64, unique=True)
     test_name = models.CharField(max_length=255)
     specimen_type = models.CharField(max_length=64)
@@ -518,6 +563,7 @@ class LabTestCatalog(models.Model):
         return f"{self.test_name} ({self.test_code})"
 
 class LabOrderItem(models.Model):
+    id = models.AutoField(primary_key=True)
     lab_order = models.ForeignKey('LabOrder', on_delete=models.CASCADE, related_name='items')
     lab_test = models.ForeignKey(LabTestCatalog, on_delete=models.CASCADE)
     notes_for_lab = models.TextField(blank=True)
@@ -526,6 +572,7 @@ class LabOrderItem(models.Model):
         return f"{self.lab_test.test_name} for Order {self.lab_order_id}"
 
 class LabResultValue(models.Model):
+    id = models.AutoField(primary_key=True)
     ABNORMAL_CHOICES = [
         ('normal', 'Normal'),
         ('low', 'Low'),
@@ -547,6 +594,7 @@ class LabResultValue(models.Model):
         return f"{self.parameter_name}: {self.value_numeric or self.value_text} {self.units}"
 
 class RoleChangeRequest(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='role_change_requests')
     requested_role = models.ForeignKey(Role, on_delete=models.CASCADE)
     reason = models.TextField(blank=True)
@@ -559,6 +607,7 @@ class RoleChangeRequest(models.Model):
         return f"{self.user.username} requests {self.requested_role.name} ({self.status})"
 
 class LoginActivity(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='login_activities')
     timestamp = models.DateTimeField(auto_now_add=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
@@ -569,6 +618,7 @@ class LoginActivity(models.Model):
         return f"{self.user.username} - {self.timestamp} - {self.status}"
 
 class ApiKey(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_keys')
     name = models.CharField(max_length=100, help_text='Label for this API key')
     key = models.CharField(max_length=64, unique=True, editable=False)
@@ -585,6 +635,7 @@ class ApiKey(models.Model):
         return f"{self.name} ({self.user.username})"
 
 class Feedback(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks')
     message = models.TextField()
     contact_email = models.EmailField(blank=True)
@@ -596,6 +647,7 @@ class Feedback(models.Model):
         return f"Feedback from {self.user.username if self.user else 'Anonymous'} at {self.created_at}"
 
 class DelegateAccess(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delegates')  # The account owner
     delegate = models.ForeignKey(User, on_delete=models.CASCADE, related_name='proxy_for')  # The delegate/proxy
     can_manage_schedule = models.BooleanField(default=False)
@@ -609,6 +661,7 @@ class DelegateAccess(models.Model):
         return f"{self.delegate.username} as delegate for {self.user.username}"
 
 class Organization(models.Model):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255, unique=True)
     address = models.CharField(max_length=255, blank=True)
     contact_email = models.EmailField(blank=True)
@@ -619,6 +672,7 @@ class Organization(models.Model):
         return self.name
 
 class OrganizationMembership(models.Model):
+    id = models.AutoField(primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='organization_memberships')
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='members')
     role = models.CharField(max_length=64, blank=True)  # e.g. Admin, Doctor, Nurse
@@ -628,3 +682,29 @@ class OrganizationMembership(models.Model):
 
     def __str__(self):
         return f"{self.user.username} in {self.organization.name} as {self.role}"
+
+class GoogleCalendarToken(models.Model):
+    id = models.AutoField(primary_key=True)
+    """
+    Model to store Google OAuth tokens for calendar integration.
+    Each user can have only one set of tokens.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='google_calendar_token')
+    access_token = models.TextField()  # Store encrypted
+    refresh_token = models.TextField()  # Store encrypted
+    token_expiry = models.DateTimeField()
+    calendar_id = models.CharField(max_length=255, default='primary')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Google Calendar Token for {self.user.username}"
+
+    def is_token_expired(self):
+        """Check if the access token is expired"""
+        return timezone.now() >= self.token_expiry
+
+    class Meta:
+        verbose_name = "Google Calendar Token"
+        verbose_name_plural = "Google Calendar Tokens"

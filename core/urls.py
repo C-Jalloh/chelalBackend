@@ -17,10 +17,37 @@ from .views import (
     SecureMessageViewSet, FinancialReportViewSet, LabTestCatalogViewSet, LabOrderItemViewSet, LabResultValueViewSet,
     LabOrderViewSet, PatientLabHistoryViewSet
 )
-from .views import RegisterView, RoleChangeRequestViewSet, dashboard_stats
+from .views import RegisterView, RoleChangeRequestViewSet, dashboard_stats, dashboard_analytics, dashboard_clinical, dashboard_operational, dashboard_financial, dashboard_quality, dashboard_patient, dashboard_staff, dashboard_research
 from .views import profile_view, user_preferences_view
 from .views import LoginActivityViewSet, ApiKeyViewSet, FeedbackViewSet, AccountViewSet, DelegateAccessViewSet
 from .views import OrganizationViewSet, OrganizationMembershipViewSet
+from .google_calendar_views import (
+    google_calendar_auth,
+    google_calendar_callback,
+    sync_appointment_to_calendar,
+    update_calendar_event,
+    delete_calendar_event,
+    get_calendar_events,
+    check_calendar_connection
+)
+from .google_calendar_views import (
+    google_calendar_auth,
+    google_calendar_callback,
+    sync_appointment_to_calendar,
+    update_calendar_event,
+    delete_calendar_event,
+    get_calendar_events,
+    check_calendar_connection
+)
+from .google_calendar_views import (
+    google_calendar_auth,
+    google_calendar_callback,
+    sync_appointment_to_calendar,
+    update_calendar_event,
+    delete_calendar_event,
+    get_calendar_events,
+    check_calendar_connection
+)
 
 router = routers.DefaultRouter()
 router.register(r'roles', RoleViewSet)
@@ -104,6 +131,23 @@ urlpatterns = [
     path('dashboard/', dashboard, name='dashboard'),
     path('health/', health_check, name='health-check'),
     path('dashboard-stats/', dashboard_stats, name='dashboard-stats'),
+    path('dashboard/analytics/', dashboard_analytics, name='dashboard-analytics'),
+    path('dashboard/clinical/', dashboard_clinical, name='dashboard-clinical'),
+    path('dashboard/operational/', dashboard_operational, name='dashboard-operational'),
+    path('dashboard/financial/', dashboard_financial, name='dashboard-financial'),
+    path('dashboard/quality/', dashboard_quality, name='dashboard-quality'),
+    path('dashboard/patient/', dashboard_patient, name='dashboard-patient'),
+    path('dashboard/staff/', dashboard_staff, name='dashboard-staff'),
+    path('dashboard/research/', dashboard_research, name='dashboard-research'),
     path('profile/', profile_view, name='profile'),
     path('preferences/', user_preferences_view, name='user-preferences'),
+
+    # Google Calendar Integration
+    path('google-calendar/auth/', google_calendar_auth, name='google-calendar-auth'),
+    path('google-calendar/callback/', google_calendar_callback, name='google-calendar-callback'),
+    path('google-calendar/sync/', sync_appointment_to_calendar, name='sync-appointment-calendar'),
+    path('google-calendar/events/<str:event_id>/update/', update_calendar_event, name='update-calendar-event'),
+    path('google-calendar/events/<str:event_id>/delete/', delete_calendar_event, name='delete-calendar-event'),
+    path('google-calendar/events/', get_calendar_events, name='get-calendar-events'),
+    path('google-calendar/connection/', check_calendar_connection, name='check-calendar-connection'),
 ]

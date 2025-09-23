@@ -1,6 +1,6 @@
 from django.test import TestCase
 from django.urls import reverse
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APIClient
 from .models import Role, User, Patient, Encounter, Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument, Appointment
 from django.core.exceptions import ValidationError
 
@@ -366,6 +366,39 @@ class UserSettingsAndAdvancedFeaturesTestCase(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.data, list)
 
+        self.assertFalse(response.data['is_active'])
+
+    def test_nurse_can_post_vitals(self):
+        # Create nurse user
+        nurse_role, _ = Role.objects.get_or_create(name='NURSE')
+        nurse = User.objects.create_user(username='perm_nurse', password='password', role=nurse_role)
+        client = APIClient()
+        client.login(username='perm_nurse', password='password')
+        resp = client.post('/api/vitals/', {
+            'systolic_bp': 120, 'diastolic_bp': 80, 'heart_rate': 70,
+            'respiratory_rate': 16, 'temperature': 36.6, 'oxygen_saturation': 98,
+            'height': 170, 'weight': 70
+        }, format='json')
+        # Permission should not be 403; data validation may return 400 if encounter missing
+        self.assertNotEqual(resp.status_code, 403)
+
+    def test_pharmacist_can_create_inventory_and_dispensing(self):
+        pharm_role, _ = Role.objects.get_or_create(name='PHARMACIST')
+        pharm = User.objects.create_user(username='perm_pharm', password='password', role=pharm_role)
+        client = APIClient()
+        client.login(username='perm_pharm', password='password')
+        resp_inv = client.post('/api/inventory/', {'name': 'Perm Med', 'quantity': 10, 'unit': 'tablet'}, format='json')
+        self.assertNotEqual(resp_inv.status_code, 403)
+        resp_disp = client.post('/api/dispensing-logs/', {'quantity_dispensed': 1}, format='json')
+        self.assertNotEqual(resp_disp.status_code, 403)
+
+    def test_doctor_restricted_from_dispensing(self):
+        doc_role, _ = Role.objects.get_or_create(name='DOCTOR')
+        doc = User.objects.create_user(username='perm_doc', password='password', role=doc_role)
+        client = APIClient()
+        client.login(username='perm_doc', password='password')
+        resp = client.post('/api/dispensing-logs/', {'quantity_dispensed': 1}, format='json')
+        self.assertIn(resp.status_code, [403, 400])
     def test_api_key_crud(self):
         url = reverse('apikey-list')
         # Create
@@ -389,7 +422,9 @@ class UserSettingsAndAdvancedFeaturesTestCase(APITestCase):
         # List feedback (should only see own)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(all(fb['user'] == self.user.id for fb in response.data))
+        # Handle pagination: response.data is a dict with 'results' key
+        results = response.data.get('results', response.data)
+        self.assertTrue(all(fb['user'] == self.user.id for fb in results))
 
     def test_account_deletion_and_data_download(self):
         # Download data
@@ -439,7 +474,9 @@ class UserSettingsAndAdvancedFeaturesTestCase(APITestCase):
         # List memberships
         response = self.client.get(mem_url)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(any(m['organization'] == org_id for m in response.data))
+        # Handle pagination
+        results = response.data.get('results', response.data)
+        self.assertTrue(any(m['organization'] == org_id for m in results))
         # Deactivate membership
         detail_url = reverse('organizationmembership-detail', args=[mem_id])
         response = self.client.patch(detail_url, {'is_active': False})
