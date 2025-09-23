@@ -4,6 +4,8 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, Toke
 from rest_framework.renderers import JSONRenderer
 from rest_framework.permissions import AllowAny
 from rest_framework import viewsets, permissions, serializers
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from .models import Role, User, Patient, Appointment, Encounter, Prescription, InventoryItem, Vitals, MedicalCondition, SurgicalHistory, FamilyHistory, Vaccination, LabOrder, PatientDocument, Notification, NoteTemplate, Task, AuditLog, Bed, Supplier, MedicationCategory, MedicationItem, StockBatch, PurchaseOrder, PurchaseOrderItem, GoodsReceivedNote, GRNItem, DispensingLog, StockAdjustment, ServiceCatalog, InsuranceDetail, Bill, BillItem, Payment, AppointmentNotification, TelemedicineSession, SyncConflict, SyncQueueStatus, Consent, Referral, SchedulableResource, ResourceBooking, SecureMessage, LabTestCatalog, LabOrderItem, LabResultValue, RoleChangeRequest, LoginActivity, ApiKey, Feedback, DelegateAccess, Organization, OrganizationMembership
 from .serializers import (
     RoleSerializer, UserSerializer, PatientSerializer, AppointmentSerializer,
@@ -24,7 +26,8 @@ from django.utils.translation import gettext_lazy as _
 from django.http import HttpResponse
 import csv
 from .consumers import NotificationConsumer
-from django.db.models import Sum, F, Case, When, Value, IntegerField, CharField
+from django.views.decorators.cache import cache_page
+from django.core.cache import cache
 from datetime import date, timedelta
 from django.db import models
 from .serializers import AuditLogSerializer
@@ -42,11 +45,13 @@ User = get_user_model()
 
 # Create your views here.
 
+@method_decorator(csrf_exempt, name='dispatch')
 class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer  # Use custom serializer for email/username login
     renderer_classes = [JSONRenderer]
     permission_classes = [AllowAny]
 
+@method_decorator(csrf_exempt, name='dispatch')
 class MyTokenRefreshView(TokenRefreshView):
     serializer_class = TokenRefreshSerializer
     renderer_classes = [JSONRenderer]
@@ -303,7 +308,9 @@ class PrescriptionViewSet(viewsets.ModelViewSet):
 class InventoryItemViewSet(viewsets.ModelViewSet):
     queryset = InventoryItem.objects.all()
     serializer_class = InventoryItemSerializer
-    permission_classes = [IsAdminOrReadOnly | IsDoctorOrReadOnly]
+    # Pharmacies manage inventory; doctors can view/read. Admins always allowed.
+    from .permissions import IsPharmacist, IsDoctorOrReadOnly, IsAdminOrReadOnly
+    permission_classes = [IsPharmacist | IsAdminOrReadOnly | IsDoctorOrReadOnly]
 
     @action(detail=False, methods=['get'])
     def medications(self, request):
@@ -364,7 +371,9 @@ class InventoryItemViewSet(viewsets.ModelViewSet):
 class VitalsViewSet(viewsets.ModelViewSet):
     queryset = Vitals.objects.all()
     serializer_class = VitalsSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    # Nurses record vitals; doctors and admins can access as well.
+    from .permissions import IsNurse, IsDoctorOrReadOnly, IsAdminOrReadOnly
+    permission_classes = [IsNurse | IsDoctorOrReadOnly | IsAdminOrReadOnly]
 
 class MedicalConditionViewSet(viewsets.ModelViewSet):
     queryset = MedicalCondition.objects.all()
@@ -631,6 +640,9 @@ class GRNItemViewSet(viewsets.ModelViewSet):
 class DispensingLogViewSet(viewsets.ModelViewSet):
     queryset = DispensingLog.objects.all()
     serializer_class = DispensingLogSerializer
+    # Only pharmacists (and admins) should create/modify dispensing logs; doctors may view.
+    from .permissions import IsPharmacist, IsDoctorOrReadOnly, IsAdminOrReadOnly
+    permission_classes = [IsPharmacist | IsDoctorOrReadOnly | IsAdminOrReadOnly]
 
 class StockAdjustmentViewSet(viewsets.ModelViewSet):
     queryset = StockAdjustment.objects.all()
@@ -639,6 +651,7 @@ class StockAdjustmentViewSet(viewsets.ModelViewSet):
 class ServiceCatalogViewSet(viewsets.ModelViewSet):
     queryset = ServiceCatalog.objects.all()
     serializer_class = ServiceCatalogSerializer
+    permission_classes = [IsAdminOrReadOnly | IsReceptionistOrReadOnly | IsDoctorOrReadOnly]
 
 class InsuranceDetailViewSet(viewsets.ModelViewSet):
     queryset = InsuranceDetail.objects.all()
@@ -888,7 +901,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Sum
+from django.db.models import Sum, F, Case, When, Value, IntegerField, CharField, Count, Q, Avg
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -1336,3 +1349,1095 @@ class OrganizationMembershipViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+# Advanced Dashboard Endpoints Implementation
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 10)  # Cache for 10 minutes
+def dashboard_analytics(request):
+    """
+    Advanced Analytics Dashboard - Provides detailed analytics and KPIs for administrators and managers.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Doctor']:
+        return Response({'error': 'Access denied. Analytics dashboard requires Admin or Doctor role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed analytics dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Patient Demographics
+        total_patients = Patient.objects.count()
+        patients_by_age = Patient.objects.annotate(
+            age_group=Case(
+                When(date_of_birth__isnull=True, then=Value('Unknown')),
+                When(date_of_birth__gte=today - timezone.timedelta(days=365*18), then=Value('0-17')),
+                When(date_of_birth__gte=today - timezone.timedelta(days=365*35), then=Value('18-34')),
+                When(date_of_birth__gte=today - timezone.timedelta(days=365*50), then=Value('35-49')),
+                When(date_of_birth__gte=today - timezone.timedelta(days=365*65), then=Value('50-64')),
+                default=Value('65+'),
+                output_field=CharField()
+            )
+        ).values('age_group').annotate(count=Count('id')).order_by('age_group')
+
+        patients_by_gender = Patient.objects.values('gender').annotate(count=Count('id'))
+
+        data['patient_demographics'] = {
+            'total_patients': total_patients,
+            'age_distribution': list(patients_by_age),
+            'gender_distribution': list(patients_by_gender)
+        }
+
+        # Appointment Utilization
+        total_appointments = Appointment.objects.count()
+        completed_appointments = Appointment.objects.filter(status='completed').count()
+        utilization_rate = (completed_appointments / total_appointments * 100) if total_appointments > 0 else 0
+
+        appointments_by_status = Appointment.objects.values('status').annotate(count=Count('id'))
+        appointments_by_doctor = Appointment.objects.values('doctor__first_name', 'doctor__last_name').annotate(
+            total=Count('id'),
+            completed=Count('id', filter=Q(status='completed'))
+        ).order_by('-total')[:10]
+
+        data['appointment_utilization'] = {
+            'total_appointments': total_appointments,
+            'completed_appointments': completed_appointments,
+            'utilization_rate': round(utilization_rate, 2),
+            'status_breakdown': list(appointments_by_status),
+            'doctor_performance': list(appointments_by_doctor)
+        }
+
+        # Average Wait Times (simplified - using appointment time vs scheduled time)
+        recent_appointments = Appointment.objects.filter(
+            date__gte=today - timezone.timedelta(days=30),
+            status='completed'
+        ).exclude(time__isnull=True).exclude(scheduled_time__isnull=True)
+
+        wait_times = []
+        for apt in recent_appointments[:100]:  # Sample for performance
+            if apt.time and apt.scheduled_time:
+                wait_time = (apt.time.hour * 60 + apt.time.minute) - (apt.scheduled_time.hour * 60 + apt.scheduled_time.minute)
+                if wait_time >= 0:  # Only positive wait times
+                    wait_times.append(wait_time)
+
+        avg_wait_time = sum(wait_times) / len(wait_times) if wait_times else 0
+
+        data['wait_times'] = {
+            'average_wait_minutes': round(avg_wait_time, 1),
+            'sample_size': len(wait_times),
+            'date_range': 'Last 30 days'
+        }
+
+        # Treatment Success Rates (simplified - based on follow-up appointments)
+        treatment_success = Appointment.objects.filter(
+            date__gte=today - timezone.timedelta(days=90),
+            status='completed'
+        ).aggregate(
+            total=Count('id'),
+            with_followup=Count('id', filter=Q(encounter__prescription__isnull=False))
+        )
+
+        success_rate = (treatment_success['with_followup'] / treatment_success['total'] * 100) if treatment_success['total'] > 0 else 0
+
+        data['treatment_success'] = {
+            'success_rate': round(success_rate, 2),
+            'total_treatments': treatment_success['total'],
+            'treatments_with_followup': treatment_success['with_followup'],
+            'date_range': 'Last 90 days'
+        }
+
+        # Resource Utilization
+        bed_utilization = Bed.objects.aggregate(
+            total_beds=Count('id'),
+            occupied_beds=Count('id', filter=Q(status='occupied'))
+        )
+        bed_occupancy_rate = (bed_utilization['occupied_beds'] / bed_utilization['total_beds'] * 100) if bed_utilization['total_beds'] > 0 else 0
+
+        data['resource_utilization'] = {
+            'bed_occupancy': {
+                'total_beds': bed_utilization['total_beds'],
+                'occupied_beds': bed_utilization['occupied_beds'],
+                'occupancy_rate': round(bed_occupancy_rate, 2)
+            }
+        }
+
+        # Financial Metrics
+        revenue_by_service = Bill.objects.filter(
+            date_issued__gte=today - timezone.timedelta(days=30)
+        ).values('department').annotate(
+            total_revenue=Sum('total_amount'),
+            transaction_count=Count('id')
+        ).order_by('-total_revenue')
+
+        payment_methods = Payment.objects.filter(
+            date_paid__gte=today - timezone.timedelta(days=30)
+        ).values('payment_method').annotate(
+            total_amount=Sum('amount'),
+            count=Count('id')
+        )
+
+        outstanding_bills = Bill.objects.filter(
+            status__in=['unpaid', 'partially_paid']
+        ).aggregate(
+            total_outstanding=Sum('total_amount'),
+            count=Count('id')
+        )
+
+        data['financial_metrics'] = {
+            'revenue_by_service': list(revenue_by_service),
+            'payment_methods': list(payment_methods),
+            'outstanding_bills': {
+                'total_amount': outstanding_bills['total_outstanding'] or 0,
+                'count': outstanding_bills['count'] or 0
+            },
+            'date_range': 'Last 30 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating analytics data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 5)  # Cache for 5 minutes
+def dashboard_clinical(request):
+    """
+    Clinical Dashboard - Supports clinical decision-making and patient care monitoring.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Doctor', 'Nurse']:
+        return Response({'error': 'Access denied. Clinical dashboard requires Admin, Doctor, or Nurse role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed clinical dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Patient Vital Signs Trends (last 30 days)
+        vitals_trends = Vitals.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).values('patient__id', 'patient__first_name', 'patient__last_name').annotate(
+            avg_blood_pressure_systolic=models.Avg('blood_pressure_systolic'),
+            avg_blood_pressure_diastolic=models.Avg('blood_pressure_diastolic'),
+            avg_heart_rate=models.Avg('heart_rate'),
+            avg_temperature=models.Avg('temperature'),
+            avg_weight=models.Avg('weight'),
+            avg_height=models.Avg('height'),
+            reading_count=Count('id')
+        ).order_by('-reading_count')[:20]
+
+        data['vitals_trends'] = list(vitals_trends)
+
+        # Medication Adherence (simplified - based on prescription pickup/fill rates)
+        prescriptions_last_30 = Prescription.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).aggregate(
+            total=Count('id'),
+            picked_up=Count('id', filter=Q(status='dispensed')),
+            not_picked_up=Count('id', filter=~Q(status='dispensed'))
+        )
+
+        adherence_rate = (prescriptions_last_30['picked_up'] / prescriptions_last_30['total'] * 100) if prescriptions_last_30['total'] > 0 else 0
+
+        data['medication_adherence'] = {
+            'adherence_rate': round(adherence_rate, 2),
+            'total_prescriptions': prescriptions_last_30['total'],
+            'picked_up': prescriptions_last_30['picked_up'],
+            'not_picked_up': prescriptions_last_30['not_picked_up'],
+            'date_range': 'Last 30 days'
+        }
+
+        # Lab Result Trends and Alerts
+        critical_lab_results = LabOrder.objects.filter(
+            status__in=['Critical', 'Abnormal'],
+            created_at__gte=today - timezone.timedelta(days=7)
+        ).values(
+            'id', 'encounter__patient__first_name', 'encounter__patient__last_name',
+            'test_type', 'status', 'created_at'
+        ).order_by('-created_at')[:10]
+
+        lab_trends = LabOrder.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).values('test_type').annotate(
+            total_tests=Count('id'),
+            abnormal_results=Count('id', filter=Q(status__in=['Critical', 'Abnormal']))
+        ).order_by('-total_tests')[:10]
+
+        data['lab_results'] = {
+            'critical_alerts': list(critical_lab_results),
+            'test_trends': list(lab_trends)
+        }
+
+        # Chronic Disease Management
+        chronic_conditions = MedicalCondition.objects.filter(
+            is_chronic=True
+        ).values('condition_name').annotate(
+            patient_count=Count('patient', distinct=True),
+            active_cases=Count('id', filter=Q(status='active'))
+        ).order_by('-patient_count')[:10]
+
+        data['chronic_disease_management'] = {
+            'conditions': list(chronic_conditions),
+            'total_chronic_patients': sum(c['patient_count'] for c in chronic_conditions)
+        }
+
+        # Infection Control Indicators
+        infection_related_encounters = Encounter.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30),
+            chief_complaint__icontains='infection'
+        ).aggregate(
+            total=Count('id'),
+            with_isolation=Count('id', filter=Q(isolation_precautions=True))
+        )
+
+        data['infection_control'] = {
+            'infection_encounters': infection_related_encounters['total'],
+            'isolation_cases': infection_related_encounters['with_isolation'],
+            'isolation_rate': round((infection_related_encounters['with_isolation'] / infection_related_encounters['total'] * 100) if infection_related_encounters['total'] > 0 else 0, 2),
+            'date_range': 'Last 30 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating clinical data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 15)  # Cache for 15 minutes
+def dashboard_operational(request):
+    """
+    Operational Dashboard - Monitors daily operations and resource management.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Receptionist']:
+        return Response({'error': 'Access denied. Operational dashboard requires Admin or Receptionist role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed operational dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Bed Occupancy Rates
+        bed_stats = Bed.objects.aggregate(
+            total_beds=Count('id'),
+            occupied=Count('id', filter=Q(status='occupied')),
+            available=Count('id', filter=Q(status='available')),
+            maintenance=Count('id', filter=Q(status='maintenance'))
+        )
+
+        bed_occupancy_rate = (bed_stats['occupied'] / bed_stats['total_beds'] * 100) if bed_stats['total_beds'] > 0 else 0
+
+        beds_by_ward = Bed.objects.values('ward').annotate(
+            total=Count('id'),
+            occupied=Count('id', filter=Q(status='occupied')),
+            occupancy_rate=Case(
+                When(total__gt=0, then=models.F('occupied') * 100.0 / models.F('total')),
+                default=0,
+                output_field=models.FloatField()
+            )
+        )
+
+        data['bed_occupancy'] = {
+            'summary': {
+                'total_beds': bed_stats['total_beds'],
+                'occupied_beds': bed_stats['occupied'],
+                'available_beds': bed_stats['available'],
+                'maintenance_beds': bed_stats['maintenance'],
+                'occupancy_rate': round(bed_occupancy_rate, 2)
+            },
+            'by_ward': list(beds_by_ward)
+        }
+
+        # Staff Scheduling and Coverage
+        active_users = User.objects.filter(is_active=True)
+        staff_by_role = active_users.values('role__name').annotate(count=Count('id'))
+
+        # Today's appointments by time slots
+        today_appointments = Appointment.objects.filter(date=today).extra(
+            select={'hour': 'EXTRACT(hour FROM time)'}
+        ).values('hour').annotate(
+            appointment_count=Count('id'),
+            completed=Count('id', filter=Q(status='completed'))
+        ).order_by('hour')
+
+        data['staff_scheduling'] = {
+            'staff_by_role': list(staff_by_role),
+            'today_schedule_load': list(today_appointments)
+        }
+
+        # Equipment Maintenance Schedule
+        # Note: This assumes there's an equipment model - using beds as proxy for now
+        maintenance_due = Bed.objects.filter(
+            last_maintenance__lte=today - timezone.timedelta(days=30)
+        ).aggregate(count=Count('id'))
+
+        data['equipment_maintenance'] = {
+            'maintenance_due': maintenance_due['count'],
+            'overdue_threshold_days': 30
+        }
+
+        # Supply Chain Status
+        low_stock_items = MedicationItem.objects.filter(
+            total_quantity__lte=models.F('reorder_level')
+        ).values('id', 'generic_name', 'total_quantity', 'reorder_level')
+
+        expiring_stock = StockBatch.objects.filter(
+            expiry_date__lte=today + timezone.timedelta(days=30)
+        ).values(
+            'id', 'medication_item__generic_name', 'expiry_date', 'current_quantity'
+        ).order_by('expiry_date')[:10]
+
+        data['supply_chain'] = {
+            'low_stock_alerts': list(low_stock_items),
+            'expiring_stock': list(expiring_stock),
+            'low_stock_count': len(low_stock_items),
+            'expiring_count': len(expiring_stock)
+        }
+
+        # Emergency Response Times (simplified - using appointment wait times as proxy)
+        emergency_appointments = Appointment.objects.filter(
+            priority='high',
+            date__gte=today - timezone.timedelta(days=7),
+            status='completed'
+        ).exclude(time__isnull=True).exclude(scheduled_time__isnull=True)
+
+        emergency_wait_times = []
+        for apt in emergency_appointments:
+            if apt.time and apt.scheduled_time:
+                wait_time = (apt.time.hour * 60 + apt.time.minute) - (apt.scheduled_time.hour * 60 + apt.scheduled_time.minute)
+                if wait_time >= 0:
+                    emergency_wait_times.append(wait_time)
+
+        avg_emergency_response = sum(emergency_wait_times) / len(emergency_wait_times) if emergency_wait_times else 0
+
+        data['emergency_response'] = {
+            'average_response_minutes': round(avg_emergency_response, 1),
+            'emergency_cases_count': len(emergency_wait_times),
+            'date_range': 'Last 7 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating operational data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 10)  # Cache for 10 minutes
+def dashboard_financial(request):
+    """
+    Financial Dashboard - Tracks financial performance and billing metrics.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Receptionist']:
+        return Response({'error': 'Access denied. Financial dashboard requires Admin or Receptionist role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed financial dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Revenue Analysis by Department/Service
+        revenue_by_department = Bill.objects.filter(
+            date_issued__gte=today - timezone.timedelta(days=30)
+        ).values('department').annotate(
+            total_revenue=Sum('total_amount'),
+            transaction_count=Count('id'),
+            average_transaction=Case(
+                When(transaction_count__gt=0, then=models.F('total_revenue') / models.F('transaction_count')),
+                default=0,
+                output_field=models.DecimalField(max_digits=10, decimal_places=2)
+            )
+        ).order_by('-total_revenue')
+
+        # Monthly revenue trend
+        monthly_revenue = Bill.objects.filter(
+            date_issued__gte=today - timezone.timedelta(days=365)
+        ).extra(select={'month': "DATE_TRUNC('month', date_issued)"}).values('month').annotate(
+            total_revenue=Sum('total_amount'),
+            transaction_count=Count('id')
+        ).order_by('month')
+
+        data['revenue_analysis'] = {
+            'by_department': list(revenue_by_department),
+            'monthly_trend': list(monthly_revenue),
+            'date_range': 'Last 30 days for department analysis, last 12 months for trends'
+        }
+
+        # Insurance Claims Status
+        claims_status = Bill.objects.filter(
+            insurance_detail__isnull=False
+        ).values('status').annotate(
+            count=Count('id'),
+            total_amount=Sum('total_amount')
+        )
+
+        pending_claims = Bill.objects.filter(
+            status__in=['submitted', 'pending_approval'],
+            insurance_detail__isnull=False
+        ).aggregate(
+            count=Count('id'),
+            total_amount=Sum('total_amount')
+        )
+
+        data['insurance_claims'] = {
+            'status_breakdown': list(claims_status),
+            'pending_claims': {
+                'count': pending_claims['count'],
+                'total_amount': pending_claims['total_amount'] or 0
+            }
+        }
+
+        # Outstanding Payments Aging
+        thirty_days_ago = today - timezone.timedelta(days=30)
+        sixty_days_ago = today - timezone.timedelta(days=60)
+        ninety_days_ago = today - timezone.timedelta(days=90)
+
+        aging_buckets = Bill.objects.filter(status__in=['unpaid', 'partially_paid']).aggregate(
+            current=Sum('total_amount', filter=Q(date_issued__gte=thirty_days_ago)),
+            thirty_days=Sum('total_amount', filter=Q(date_issued__lt=thirty_days_ago, date_issued__gte=sixty_days_ago)),
+            sixty_days=Sum('total_amount', filter=Q(date_issued__lt=sixty_days_ago, date_issued__gte=ninety_days_ago)),
+            ninety_plus=Sum('total_amount', filter=Q(date_issued__lt=ninety_days_ago))
+        )
+
+        data['outstanding_payments'] = {
+            'aging_buckets': {
+                'current': aging_buckets['current'] or 0,
+                '30_days': aging_buckets['thirty_days'] or 0,
+                '60_days': aging_buckets['sixty_days'] or 0,
+                '90_plus_days': aging_buckets['ninety_plus'] or 0
+            },
+            'total_outstanding': sum(filter(None, aging_buckets.values()))
+        }
+
+        # Cost Analysis by Treatment Type
+        cost_by_service = BillItem.objects.filter(
+            bill__date_issued__gte=today - timezone.timedelta(days=30)
+        ).values('service_catalog__name').annotate(
+            total_cost=Sum('amount'),
+            usage_count=Count('id'),
+            average_cost=Case(
+                When(usage_count__gt=0, then=models.F('total_cost') / models.F('usage_count')),
+                default=0,
+                output_field=models.DecimalField(max_digits=10, decimal_places=2)
+            )
+        ).order_by('-total_cost')[:10]
+
+        data['cost_analysis'] = {
+            'by_treatment_type': list(cost_by_service),
+            'date_range': 'Last 30 days'
+        }
+
+        # Payment Method Distribution
+        payment_distribution = Payment.objects.filter(
+            date_paid__gte=today - timezone.timedelta(days=30)
+        ).values('payment_method').annotate(
+            total_amount=Sum('amount'),
+            transaction_count=Count('id'),
+            percentage=Case(
+                When(total_amount__isnull=False, then=models.Value(0)),  # Will calculate in Python
+                default=0,
+                output_field=models.DecimalField(max_digits=5, decimal_places=2)
+            )
+        )
+
+        total_payments = sum(p['total_amount'] or 0 for p in payment_distribution)
+        for payment in payment_distribution:
+            if total_payments > 0:
+                payment['percentage'] = round((payment['total_amount'] or 0) / total_payments * 100, 2)
+
+        data['payment_methods'] = {
+            'distribution': list(payment_distribution),
+            'total_payments': total_payments,
+            'date_range': 'Last 30 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating financial data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 5)  # Cache for 5 minutes
+def dashboard_quality(request):
+    """
+    Quality Assurance Dashboard - Monitors healthcare quality indicators and compliance.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Doctor', 'Nurse']:
+        return Response({'error': 'Access denied. Quality dashboard requires Admin, Doctor, or Nurse role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed quality dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Patient Satisfaction Scores (using feedback as proxy)
+        recent_feedback = Feedback.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).aggregate(
+            total_responses=Count('id'),
+            average_rating=models.Avg('rating'),
+            positive_feedback=Count('id', filter=Q(rating__gte=4)),
+            negative_feedback=Count('id', filter=Q(rating__lt=3))
+        )
+
+        satisfaction_rate = (recent_feedback['positive_feedback'] / recent_feedback['total_responses'] * 100) if recent_feedback['total_responses'] > 0 else 0
+
+        data['patient_satisfaction'] = {
+            'average_rating': round(recent_feedback['average_rating'] or 0, 2),
+            'satisfaction_rate': round(satisfaction_rate, 2),
+            'total_responses': recent_feedback['total_responses'],
+            'positive_feedback': recent_feedback['positive_feedback'],
+            'negative_feedback': recent_feedback['negative_feedback'],
+            'date_range': 'Last 30 days'
+        }
+
+        # Readmission Rates
+        ninety_days_ago = today - timezone.timedelta(days=90)
+        discharged_patients = Encounter.objects.filter(
+            discharge_date__isnull=False,
+            discharge_date__gte=ninety_days_ago
+        ).values('patient').distinct()
+
+        readmissions = Encounter.objects.filter(
+            patient__in=[p['patient'] for p in discharged_patients],
+            admission_date__gte=ninety_days_ago,
+            admission_date__gt=models.F('discharge_date')
+        ).aggregate(readmission_count=Count('id', distinct=True))
+
+        total_discharges = len(discharged_patients)
+        readmission_rate = (readmissions['readmission_count'] / total_discharges * 100) if total_discharges > 0 else 0
+
+        data['readmission_rates'] = {
+            'readmission_rate': round(readmission_rate, 2),
+            'total_discharges': total_discharges,
+            'readmissions': readmissions['readmission_count'],
+            'date_range': 'Last 90 days'
+        }
+
+        # Infection Rates
+        infection_encounters = Encounter.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30),
+            chief_complaint__icontains='infection'
+        ).count()
+
+        total_encounters = Encounter.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).count()
+
+        infection_rate = (infection_encounters / total_encounters * 100) if total_encounters > 0 else 0
+
+        data['infection_rates'] = {
+            'infection_rate': round(infection_rate, 2),
+            'infection_cases': infection_encounters,
+            'total_encounters': total_encounters,
+            'date_range': 'Last 30 days'
+        }
+
+        # Medication Error Rates
+        # Using dispensing logs with adjustments as proxy for errors
+        medication_adjustments = StockAdjustment.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30),
+            reason__icontains='error'
+        ).count()
+
+        total_dispensing = DispensingLog.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).count()
+
+        error_rate = (medication_adjustments / total_dispensing * 100) if total_dispensing > 0 else 0
+
+        data['medication_errors'] = {
+            'error_rate': round(error_rate, 2),
+            'error_incidents': medication_adjustments,
+            'total_dispensing': total_dispensing,
+            'date_range': 'Last 30 days'
+        }
+
+        # Compliance with Clinical Guidelines
+        # Simplified: percentage of encounters with complete documentation
+        encounters_with_docs = Encounter.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).annotate(
+            has_vitals=Case(When(vitals__isnull=False, then=1), default=0, output_field=IntegerField()),
+            has_prescription=Case(When(prescription__isnull=False, then=1), default=0, output_field=IntegerField()),
+            has_lab_order=Case(When(laborder__isnull=False, then=1), default=0, output_field=IntegerField())
+        ).aggregate(
+            total_encounters=Count('id'),
+            complete_docs=Count('id', filter=Q(has_vitals=1) | Q(has_prescription=1) | Q(has_lab_order=1))
+        )
+
+        compliance_rate = (encounters_with_docs['complete_docs'] / encounters_with_docs['total_encounters'] * 100) if encounters_with_docs['total_encounters'] > 0 else 0
+
+        data['clinical_guidelines'] = {
+            'compliance_rate': round(compliance_rate, 2),
+            'encounters_with_docs': encounters_with_docs['complete_docs'],
+            'total_encounters': encounters_with_docs['total_encounters'],
+            'date_range': 'Last 30 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating quality data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 2)  # Cache for 2 minutes (personal data)
+def dashboard_patient(request):
+    """
+    Patient Portal Dashboard - Provides patients with access to their health information.
+    """
+    user = request.user
+    if not user.role or user.role.name != 'Patient':
+        return Response({'error': 'Access denied. Patient dashboard is only for patients.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed patient dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Get patient's actual record
+        try:
+            patient = Patient.objects.get(user=user)
+        except Patient.DoesNotExist:
+            return Response({'error': 'Patient record not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Upcoming Appointments
+        upcoming_appointments = Appointment.objects.filter(
+            patient=patient,
+            date__gte=today,
+            status__in=['scheduled', 'confirmed']
+        ).order_by('date', 'time').values(
+            'id', 'date', 'time', 'doctor__first_name', 'doctor__last_name',
+            'appointment_type', 'status', 'notes'
+        )[:5]
+
+        data['upcoming_appointments'] = list(upcoming_appointments)
+
+        # Recent Lab Results
+        recent_lab_results = LabOrder.objects.filter(
+            encounter__patient=patient,
+            created_at__gte=today - timezone.timedelta(days=90)
+        ).order_by('-created_at').values(
+            'id', 'test_type', 'status', 'created_at',
+            'labresultvalue__test_name', 'labresultvalue__value', 'labresultvalue__unit',
+            'labresultvalue__reference_range', 'labresultvalue__is_abnormal'
+        )[:10]
+
+        data['recent_lab_results'] = list(recent_lab_results)
+
+        # Current Medications
+        current_medications = Prescription.objects.filter(
+            encounter__patient=patient,
+            status__in=['active', 'dispensed'],
+            end_date__gte=today
+        ).order_by('-created_at').values(
+            'id', 'medication_name', 'dosage', 'frequency', 'duration',
+            'start_date', 'end_date', 'instructions', 'status'
+        )[:10]
+
+        data['current_medications'] = list(current_medications)
+
+        # Health Summary
+        latest_vitals = Vitals.objects.filter(
+            patient=patient
+        ).order_by('-created_at').first()
+
+        active_conditions = MedicalCondition.objects.filter(
+            patient=patient,
+            status='active'
+        ).values('condition_name', 'diagnosis_date', 'severity', 'notes')
+
+        recent_encounters = Encounter.objects.filter(
+            patient=patient
+        ).order_by('-admission_date').values(
+            'id', 'admission_date', 'discharge_date', 'chief_complaint',
+            'diagnosis', 'treatment_plan'
+        )[:3]
+
+        data['health_summary'] = {
+            'latest_vitals': {
+                'blood_pressure': f"{latest_vitals.blood_pressure_systolic}/{latest_vitals.blood_pressure_diastolic}" if latest_vitals else None,
+                'heart_rate': latest_vitals.heart_rate if latest_vitals else None,
+                'temperature': latest_vitals.temperature if latest_vitals else None,
+                'weight': latest_vitals.weight if latest_vitals else None,
+                'recorded_date': latest_vitals.created_at if latest_vitals else None
+            } if latest_vitals else None,
+            'active_conditions': list(active_conditions),
+            'recent_encounters': list(recent_encounters)
+        }
+
+        # Bill Payment Status
+        outstanding_bills = Bill.objects.filter(
+            patient=patient,
+            status__in=['unpaid', 'partially_paid']
+        ).order_by('-date_issued').values(
+            'id', 'date_issued', 'total_amount', 'paid_amount', 'status',
+            'due_date', 'department'
+        )[:5]
+
+        recent_payments = Payment.objects.filter(
+            bill__patient=patient
+        ).order_by('-date_paid').values(
+            'id', 'date_paid', 'amount', 'payment_method', 'bill__id'
+        )[:5]
+
+        data['billing_status'] = {
+            'outstanding_bills': list(outstanding_bills),
+            'recent_payments': list(recent_payments),
+            'total_outstanding': sum(bill['total_amount'] - (bill['paid_amount'] or 0) for bill in outstanding_bills)
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating patient dashboard data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 5)  # Cache for 5 minutes
+def dashboard_staff(request):
+    """
+    Staff Performance Dashboard - Monitors staff productivity and performance metrics.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Doctor']:
+        return Response({'error': 'Access denied. Staff dashboard requires Admin or Doctor role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed staff performance dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Appointment Completion Rates by Provider
+        provider_performance = User.objects.filter(
+            role__name__in=['Doctor', 'Nurse']
+        ).annotate(
+            total_appointments=Count('appointment_doctor', distinct=True),
+            completed_appointments=Count('appointment_doctor', filter=Q(appointment_doctor__status='completed'), distinct=True),
+            completion_rate=Case(
+                When(total_appointments__gt=0, then=models.F('completed_appointments') * 100.0 / models.F('total_appointments')),
+                default=0,
+                output_field=models.FloatField()
+            )
+        ).values(
+            'id', 'first_name', 'last_name', 'role__name',
+            'total_appointments', 'completed_appointments', 'completion_rate'
+        ).order_by('-completion_rate')[:20]
+
+        data['provider_performance'] = list(provider_performance)
+
+        # Patient Satisfaction by Provider (using feedback linked to encounters)
+        satisfaction_by_provider = User.objects.filter(
+            role__name__in=['Doctor', 'Nurse']
+        ).annotate(
+            feedback_count=Count('encounter_doctor__feedback', distinct=True),
+            avg_satisfaction=Avg('encounter_doctor__feedback__rating')
+        ).values(
+            'id', 'first_name', 'last_name', 'role__name',
+            'feedback_count', 'avg_satisfaction'
+        ).filter(feedback_count__gt=0).order_by('-avg_satisfaction')[:20]
+
+        data['patient_satisfaction_by_provider'] = list(satisfaction_by_provider)
+
+        # Task Completion Metrics
+        task_completion = Task.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30)
+        ).values('assignee__first_name', 'assignee__last_name').annotate(
+            total_tasks=Count('id'),
+            completed_tasks=Count('id', filter=Q(status='completed')),
+            completion_rate=Case(
+                When(total_tasks__gt=0, then=models.F('completed_tasks') * 100.0 / models.F('total_tasks')),
+                default=0,
+                output_field=models.FloatField()
+            )
+        ).order_by('-completion_rate')[:15]
+
+        data['task_completion'] = {
+            'by_assignee': list(task_completion),
+            'date_range': 'Last 30 days'
+        }
+
+        # Continuing Education Tracking
+        # Note: This assumes there's a training/certification model - using login activity as proxy
+        active_users = User.objects.filter(
+            is_active=True,
+            role__name__in=['Doctor', 'Nurse', 'Pharmacist']
+        ).annotate(
+            last_login_days=Case(
+                When(last_login__isnull=False, then=(timezone.now().date() - models.F('last_login__date')).days),
+                default=999,
+                output_field=IntegerField()
+            )
+        ).values(
+            'id', 'first_name', 'last_name', 'role__name', 'last_login', 'last_login_days'
+        ).order_by('last_login_days')[:20]
+
+        data['staff_engagement'] = {
+            'recently_active': [u for u in active_users if u['last_login_days'] <= 7],
+            'inactive_warning': [u for u in active_users if u['last_login_days'] > 7 and u['last_login_days'] <= 30],
+            'inactive_critical': [u for u in active_users if u['last_login_days'] > 30]
+        }
+
+        # Workload Distribution
+        workload_distribution = User.objects.filter(
+            role__name__in=['Doctor', 'Nurse', 'Pharmacist']
+        ).annotate(
+            appointment_count=Count('appointment_doctor', distinct=True),
+            task_count=Count('task_assignee', distinct=True),
+            encounter_count=Count('encounter_doctor', distinct=True)
+        ).values(
+            'id', 'first_name', 'last_name', 'role__name',
+            'appointment_count', 'task_count', 'encounter_count'
+        ).annotate(
+            total_workload=models.F('appointment_count') + models.F('task_count') + models.F('encounter_count')
+        ).order_by('-total_workload')[:20]
+
+        data['workload_distribution'] = list(workload_distribution)
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating staff performance data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@cache_page(60 * 10)  # Cache for 10 minutes
+def dashboard_research(request):
+    """
+    Research Dashboard - Supports clinical research and data analysis.
+    """
+    user = request.user
+    if not user.role or user.role.name not in ['Admin', 'Doctor']:
+        return Response({'error': 'Access denied. Research dashboard requires Admin or Doctor role.'},
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Audit logging for dashboard access
+    AuditLog.objects.create(
+        user=user,
+        action='view',
+        description=f'Accessed research dashboard',
+        ip_address=request.META.get('REMOTE_ADDR', ''),
+        user_agent=request.META.get('HTTP_USER_AGENT', '')
+    )
+
+    today = timezone.now().date()
+    data = {}
+
+    try:
+        # Study Enrollment Tracking (simplified - using encounters with research flag)
+        research_encounters = Encounter.objects.filter(
+            is_research=True,
+            created_at__gte=today - timezone.timedelta(days=90)
+        ).aggregate(
+            total_studies=Count('id', distinct=True),
+            enrolled_patients=Count('patient', distinct=True),
+            active_studies=Count('id', filter=Q(status='active'), distinct=True)
+        )
+
+        enrollment_trend = Encounter.objects.filter(
+            is_research=True,
+            created_at__gte=today - timezone.timedelta(days=365)
+        ).extra(select={'month': "DATE_TRUNC('month', created_at)"}).values('month').annotate(
+            enrollments=Count('id', distinct=True)
+        ).order_by('month')
+
+        data['study_enrollment'] = {
+            'summary': research_encounters,
+            'monthly_trend': list(enrollment_trend),
+            'date_range': 'Last 90 days for summary, last 12 months for trends'
+        }
+
+        # Data Collection Progress
+        data_collection = LabOrder.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30),
+            encounter__is_research=True
+        ).values('test_type').annotate(
+            total_samples=Count('id'),
+            completed_tests=Count('id', filter=Q(status__in=['completed', 'verified'])),
+            pending_tests=Count('id', filter=Q(status__in=['ordered', 'in_progress']))
+        ).order_by('-total_samples')[:10]
+
+        data['data_collection'] = {
+            'by_test_type': list(data_collection),
+            'date_range': 'Last 30 days'
+        }
+
+        # Research Metrics
+        research_metrics = {
+            'total_research_encounters': Encounter.objects.filter(is_research=True).count(),
+            'active_research_patients': Encounter.objects.filter(
+                is_research=True, status='active'
+            ).values('patient').distinct().count(),
+            'completed_studies': Encounter.objects.filter(
+                is_research=True, status='completed'
+            ).count(),
+            'publications_count': 0  # Placeholder - would need a publications model
+        }
+
+        data['research_metrics'] = research_metrics
+
+        # IRB Compliance Status
+        # Simplified - using audit logs related to research
+        research_audits = AuditLog.objects.filter(
+            created_at__gte=today - timezone.timedelta(days=30),
+            action__icontains='research'
+        ).count()
+
+        compliance_status = 'compliant' if research_audits > 0 else 'needs_review'
+
+        data['irb_compliance'] = {
+            'status': compliance_status,
+            'recent_audits': research_audits,
+            'last_audit_date': AuditLog.objects.filter(
+                action__icontains='research'
+            ).order_by('-timestamp').values('timestamp').first(),
+            'date_range': 'Last 30 days'
+        }
+
+        return Response({
+            'status': 'success',
+            'data': data,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Error generating research data: {str(e)}',
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

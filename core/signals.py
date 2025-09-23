@@ -5,6 +5,7 @@ from django.forms.models import model_to_dict
 from django.utils import timezone
 from django.conf import settings
 from datetime import date # Import date from datetime
+from decimal import Decimal
 
 from .models import AuditLog, Patient, Prescription, InventoryItem, User, LabOrder, LabOrderItem, LabResultValue
 
@@ -42,6 +43,8 @@ def log_model_save(sender, instance, created, **kwargs):
             details[key] = value.isoformat()
         elif isinstance(value, date): # Use the imported date class
             details[key] = value.strftime('%Y-%m-%d')
+        elif isinstance(value, Decimal):
+            details[key] = str(value)  # Convert Decimal to string for JSON serialization
         # Fix: Convert FieldFile (e.g., profile_image, result_file) to string path or None, but only if file exists
         elif hasattr(value, 'name'):
             details[key] = str(value.name) if value and value.name else None
@@ -68,24 +71,10 @@ def log_model_save(sender, instance, created, **kwargs):
 @receiver(post_delete, sender=LabOrderItem)
 @receiver(post_delete, sender=LabResultValue)
 def log_model_delete(sender, instance, **kwargs):
-    description = f'{sender.__name__} deleted: {instance}'
-    details = model_to_dict(instance)
-
-    # Convert date objects to strings for JSON serialization
-    for key, value in details.items():
-        if isinstance(value, timezone.datetime):
-            details[key] = value.isoformat()
-        elif isinstance(value, date): # Use the imported date class
-            details[key] = value.strftime('%Y-%m-%d')
-
-    # Attempt to get the user from kwargs or request context if available
-    user = kwargs.get('user', None)
-
     AuditLog.objects.create(
-        user=user,
+        user=None,  # No user context for deletions
         action="delete",
         object_type=sender.__name__,
         object_id=instance.pk,
-        description=description,
-        details=details
+        description=f'{sender.__name__} deleted: {instance}'
     )

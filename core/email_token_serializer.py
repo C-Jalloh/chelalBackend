@@ -47,5 +47,37 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
                 user_agent=user_agent,
                 status='success',
                 timestamp=timezone.now()
-            )
+        )
         return result
+
+    def validate(self, attrs):
+        # Call parent validate method first
+        data = super().validate(attrs)
+        
+        # Add user data to the response
+        user = self.user
+        data['user'] = {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'role': user.role.name if user.role else None,
+            'is_staff': user.is_staff,
+        }
+        
+        return data
+
+    def get_token(self, user):
+        token = super().get_token(user)
+        # Add user data to token
+        token['user'] = {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'role': user.role.name if user.role else None,
+            'is_staff': user.is_staff,
+        }
+        return token
